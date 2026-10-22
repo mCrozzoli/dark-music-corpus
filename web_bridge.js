@@ -1,0 +1,412 @@
+// Dark Music Corpus — the web build's stand-in for viz/bridge.py (Phase A–C, 2026-10-22).
+//
+// The page (viz/index.html, patched by build/build_web.py) talks to a bridge over fetch("/api/…") and a WebSocket.
+// Here there is no server: this file answers those calls inside the page.
+//   · fetch: /api/data → data/payload.json.gz (the desktop bridge's own payload, exported by build/export_demo.py),
+//     /api/defaults, /api/keys_catalogue, /api/corpora → static JSON; /api/presets, /api/traces → browser storage;
+//     /clip → the audio provider (below).
+//   · the page's WebSocket to "the bridge" becomes an in-page object (PageSocket) that handles the same messages as
+//     bridge.py's handler: nav, reading, zoom, marker(s), probe, live, recompute/cancel/undo/defaults.
+//   · the Live side: bridge.py's class Live, ported (announce, schema blocks, rows, clips, events E1/E3/E4–E8,
+//     rate-limited pump, hello until ack, keepalive), sent to the DMC Hub over ws://127.0.0.1:9002/dmc in the
+//     WS_CONTRACT shape {a, args} / {b: [...]} instead of OSC over UDP.
+(() => {
+  "use strict";
+  const NATIVE_FETCH = window.fetch.bind(window);           // before anything fetches (W.ready runs at load)
+  const BASE = new URL(".", document.currentScript ? document.currentScript.src : location.href);
+  const url = (p) => new URL(p, BASE).href;
+  const LS = { get(k, d) { try { const v = localStorage.getItem("dmc." + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
+               set(k, v) { try { localStorage.setItem("dmc." + k, JSON.stringify(v)); } catch (_) {} } };
+  const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "Content-Type": "application/json" } });
+  async function gunzipJson(path) {
+    const r = await NATIVE_FETCH(url(path));
+    if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+    const ds = new DecompressionStream("gzip");
+    return JSON.parse(await new Response(r.body.pipeThrough(ds)).text());
+  }
+  const staticJson = (path) => NATIVE_FETCH(url(path)).then((r) => r.json());
+
+  // ------------------------------------------------------------------ the dataset (demo for now; own corpus in Phase D)
+  const W = (window.DMC_WEB = { ready: null, data: null, link: null, audio: null, mode: "demo" });
+  W.ready = (async () => {
+    const [data, link] = await Promise.all([gunzipJson("data/payload.json.gz"), staticJson("data/link.json")]);
+    W.data = data; W.linkData = link;
+    W.clipRow = new Map(data.levels.l1.clip_id.map((c, i) => [c, i]));
+    W.clipAt = new Map(data.levels.l1.clip_id.map((c, i) => [`${data.levels.l1.file[i]}@${(+data.levels.l1.t0[i]).toFixed(3)}`, c]));
+    return data;
+  })();
+
+  // ------------------------------------------------------------------ audio provider
+  // demo: compressed excerpts (data/excerpts/…, pending Miguel's choice) or, on a local dev server with ?dev=1, the
+  // design's own WAV proxies cut in the page. Own corpus (Phase D): the decoded files in memory.
+  const Q = new URLSearchParams(location.search);
+  const LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  W.audio = {
+    mode: Q.get("dev") === "1" && LOCAL ? "dev-proxies" : "excerpts",
+    tracks: new Map(),                                           // file index → Promise<AudioBuffer> (dev-proxies)
+    async clip(f, t0, t1) {
+      if (this.mode === "own") return wavWindow(await ownTrack(f), t0, t1);
+      if (this.mode === "dev-proxies") {
+        const tr = W.data.tracks[f];
+        if (!this.tracks.has(f)) {
+          const p = `/projects/designs/dark_music_corpus/darkdata/proxies/${W.data.corpus_name}/${tr.rel_path.replace(/\.[^.]+$/, ".wav")}`;
+          this.tracks.set(f, NATIVE_FETCH(p).then((r) => r.arrayBuffer()).then((b) => new OfflineAudioContext(2, 1, 48000).decodeAudioData(b)));
+        }
+        return wavWindow(await this.tracks.get(f), t0, t1);
+      }
+      const cid = W.clipAt.get(`${f}@${(+t0).toFixed(3)}`);
+      if (cid == null) throw new Error("no such clip in the demo");
+      const ext = await pickExt(cid);
+      const r = await NATIVE_FETCH(url(`data/excerpts/${String(cid).replace(/:/g, "_")}.${ext}`));
+      if (!r.ok) throw new Error("this clip has no excerpt in the demo");
+      return r.arrayBuffer();
+    },
+    trackUrl(f) {                                                // demo: no whole tracks are hosted ("play on" is off)
+      if (this.mode !== "own") return null;
+      if (!this.urls.has(f)) this.urls.set(f, URL.createObjectURL(OWN.files[f]));
+      return this.urls.get(f);
+    },
+    urls: new Map(),
+  };
+  // own corpus: the visitor's File objects; a decoded track is kept for the two most recent files
+  const OWN = (W.own = { files: [], decoded: new Map() });
+  async function ownTrack(f) {
+    if (!OWN.decoded.has(f)) {
+      OWN.decoded.set(f, OWN.files[f].arrayBuffer().then((b) => new OfflineAudioContext(2, 1, 48000).decodeAudioData(b)));
+      while (OWN.decoded.size > 2) OWN.decoded.delete(OWN.decoded.keys().next().value);
+    }
+    return OWN.decoded.get(f);
+  }
+  // canPlayType says "maybe" for Ogg Opus on engines that then fail to decode it (WebKit): decide by decoding once
+  let EXT = null, EXT_PROBE = null;
+  function pickExt(cid) {
+    if (EXT) return Promise.resolve(EXT);
+    if (!EXT_PROBE) EXT_PROBE = (async () => {
+      const name = String(cid).replace(/:/g, "_");
+      for (const ext of ["opus", "mp3"]) {
+        try { const b = await (await NATIVE_FETCH(url(`data/excerpts/${name}.${ext}`))).arrayBuffer();
+              await new OfflineAudioContext(1, 1, 48000).decodeAudioData(b); return (EXT = ext); } catch (_) {}
+      }
+      return (EXT = "mp3");
+    })();
+    return EXT_PROBE;
+  }
+  function wavWindow(buf, t0, t1) {                              // a 16-bit PCM WAV of [t0, t1) — what /clip returns
+    const sr = buf.sampleRate, a = Math.max(0, Math.floor(t0 * sr)), b = Math.min(buf.length, Math.ceil(t1 * sr)), n = b - a, ch = Math.min(2, buf.numberOfChannels);
+    const out = new DataView(new ArrayBuffer(44 + n * ch * 2)), w = (o, s) => { for (let i = 0; i < s.length; i++) out.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, "RIFF"); out.setUint32(4, 36 + n * ch * 2, true); w(8, "WAVE"); w(12, "fmt "); out.setUint32(16, 16, true); out.setUint16(20, 1, true);
+    out.setUint16(22, ch, true); out.setUint32(24, sr, true); out.setUint32(28, sr * ch * 2, true); out.setUint16(32, ch * 2, true); out.setUint16(34, 16, true);
+    w(36, "data"); out.setUint32(40, n * ch * 2, true);
+    const C = Array.from({ length: ch }, (_, c) => buf.getChannelData(c));
+    for (let i = 0, o = 44; i < n; i++) for (let c = 0; c < ch; c++, o += 2) out.setInt16(o, Math.max(-1, Math.min(1, C[c][a + i])) * 0x7fff, true);
+    return out.buffer;
+  }
+
+  // ------------------------------------------------------------------ fetch
+  window.fetch = async (input, init = {}) => {
+    const u = new URL(typeof input === "string" ? input : input.url, location.href);
+    const p = u.pathname, m = (init.method || "GET").toUpperCase();
+    if (u.origin !== location.origin || !(p.startsWith("/api/") || p === "/clip")) return NATIVE_FETCH(input, init);
+    try {
+      await W.ready;
+      if (p === "/api/ports") return json({ ws: "page" });
+      if (p === "/api/data") return json(W.data);
+      if (p === "/api/defaults") return NATIVE_FETCH(url("data/defaults.json"));
+      if (p === "/api/keys_catalogue") return NATIVE_FETCH(url("data/keys_catalogue.json"));
+      if (p === "/api/corpora") return json([{ name: W.data.corpus_name, path: `data/corpora/${W.data.corpus_name}`, files: W.data.tracks.length,
+                                              duration_s: W.data.tracks.reduce((s, t) => s + t.duration, 0), symlink: false }]);
+      for (const kind of ["presets", "traces"]) {
+        if (p === `/api/${kind}`) {
+          if (m === "POST") { const b = JSON.parse(init.body || "{}"), all = LS.get(kind, {}); all[String(b.name).replace(/[^A-Za-z0-9_.-]/g, "_")] = b.data; LS.set(kind, all); return json({ ok: true }); }
+          return json(Object.keys(LS.get(kind, {})).sort());
+        }
+        if (p.startsWith(`/api/${kind}/`)) { const n = decodeURIComponent(p.split("/").pop()), all = LS.get(kind, {}); return n in all ? json(all[n]) : json({ error: "not found" }, 404); }
+      }
+      if (p === "/clip") {
+        const b = await W.audio.clip(+u.searchParams.get("f"), +u.searchParams.get("t0"), +u.searchParams.get("t1"));
+        return new Response(b, { headers: { "Content-Type": W.audio.mode !== "excerpts" ? "audio/wav" : EXT === "opus" ? "audio/ogg" : "audio/mpeg" } });
+      }
+      return json({ error: "not available in the web version" }, 404);
+    } catch (e) { return json({ error: String(e && e.message || e) }, 500); }
+  };
+
+  // ------------------------------------------------------------------ the Hub link (bridge.Live, ported)
+  const now = () => performance.now() / 1000;
+  class Link {
+    constructor(page) {
+      this.page = page; this.enabled = false; this.host = "127.0.0.1"; this.port = 9002; this.rate = 20;
+      this.ws = null; this.wsState = "off"; this.pending = null; this.lastAck = 0; this.ackSet = null; this.hub = null;
+      this.sent = []; this.reading = null; this.lastHello = 0; this.lastFull = 0; this.lastCluster = null; this.reannounce = false;
+      this.visitsClip = {}; this.visitsCluster = {}; this.visitVersion = null; this.e4 = []; this.queue = [];
+      setInterval(() => this.pump(), 1000 / 20); setInterval(() => this.page.push(this.status()), 1000);
+    }
+    get connected() { return this.lastAck > 0 && now() - this.lastAck < 12; }
+    configure({ enabled, host, port, rate } = {}) {
+      if (port != null && +port !== this.port) { this.port = +port; this.close(); this.lastAck = 0; }
+      if (rate != null) this.rate = Math.max(0.5, Math.min(120, +rate));
+      if (enabled != null) { this.enabled = !!enabled; if (this.enabled) { this.lastHello = 0; this.open(); } else this.close(); }
+    }
+    open() {
+      if (this.ws) return;
+      this.wsState = "connecting";
+      let ws; try { ws = new NATIVE_WS(`ws://${this.host}:${this.port}/dmc`); } catch (e) { this.wsState = "refused"; this.ws = null; return; }
+      this.ws = ws;
+      ws.onopen = () => { this.wsState = "linked"; this.announce(); };
+      ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+        if (m.a === "/dmc/ack") { const was = this.connected; this.lastAck = now(); this.ackSet = m.args && m.args[0]; if (!was) this.reannounce = true; }
+        else if (m.a === "/dmc/hub") this.hub = { version: m.args[0], root_set: !!m.args[1] };
+        else if (m.a === "/dmc/busy") this.wsState = "busy";
+        else if (m.a === "/dmc/transport") this.transport = m.args; };
+      ws.onclose = (e) => { this.ws = null; this.lastAck = 0;
+        this.wsState = e.code === 4009 ? "busy" : e.code === 4003 ? "refused (origin)" : this.enabled ? "no Hub" : "off";
+        if (this.enabled) setTimeout(() => this.enabled && this.open(), 3000); };
+      ws.onerror = () => {};
+    }
+    close() { if (this.ws) { try { this.ws.close(1000); } catch (_) {} } this.ws = null; this.wsState = this.enabled ? "no Hub" : "off"; }
+    _send(a, args) { if (this.ws && this.ws.readyState === 1) { this.ws.send(JSON.stringify({ a, args })); this.sent.push(now()); } }
+    _batch(msgs) { if (this.ws && this.ws.readyState === 1 && msgs.length) { this.ws.send(JSON.stringify({ b: msgs })); for (let i = 0; i < msgs.length; i++) this.sent.push(now()); } }
+    msgsPerS() { const t = now(); this.sent = this.sent.filter((x) => t - x < 1); return this.sent.length; }
+    schemaBlock(block, keys, infos) {                            // dmc.osc.send_schema_block, as one batch
+      const b = [{ a: "/dmc/schema/begin", args: [block, keys.length] }];
+      for (const k of keys) {
+        b.push({ a: "/dmc/schema/key", args: [String(k[0]), String(k[1]), +k[2], +k[3], +k[4], +k[5], k[6] | 0, k.length > 7 ? k[7] | 0 : -1, k.length > 8 ? String(k[8]) : ""] });
+        b.push({ a: "/dmc/schema/info", args: [String(k[0]), String((infos || {})[k[0]] || "")] });
+      }
+      b.push({ a: "/dmc/schema/end", args: [block] });
+      this._batch(b);
+    }
+    liveKeys() {                                                 // the _live block + this page's probes (S9)
+      const L = W.linkData, keys = L.live_keys.slice(), infos = Object.assign({}, L.live_infos);
+      for (const [name, p] of Object.entries(this.page.probes)) { keys.push(p.key); infos[name] = p.desc; }
+      return { keys, infos };
+    }
+    announce(reading) {
+      if (!this.enabled) return;
+      this._send("/dmc/hello", [W.linkData.set_id, W.linkData.version]);
+      this.announceLive(); this.announceReading(reading);
+      this.lastHello = this.lastFull = now();
+    }
+    announceLive() { if (!this.enabled) return; const { keys, infos } = this.liveKeys(); if (keys.length) this.schemaBlock(W.linkData.live_block, keys, infos); }
+    announceReading(reading) {
+      if (!this.enabled) return;
+      const R = W.data.readings; this.reading = reading || this.reading || R[0]; if (!R.includes(this.reading)) this.reading = R[0];
+      const r = W.linkData.readings[this.reading]; this.schemaBlock(this.reading, r.osc_keys, r.infos);
+    }
+    fam(code) { const f = W.linkData.families[code]; return f || { enabled: false }; }
+    event(code, type, key, value, cid = "") { if (this.enabled && this.fam(code).enabled) this._send("/dmc/event", [String(type), String(key), value, String(cid)]); }
+    nav(reading, idx, kind = "hover", step = null) {
+      if (!this.enabled) return;
+      if (reading !== this.reading) this.announceReading(reading);
+      this.pending = [reading, idx | 0, kind, step];
+    }
+    flush() {
+      if (!this.enabled || !this.pending) return;
+      const [reading, i, kind, step] = this.pending; this.pending = null;
+      const D = W.data, L = D.levels.l1, rd = L.readings[reading];
+      if (this.visitVersion !== D.version) { this.visitVersion = D.version; this.visitsClip = {}; this.visitsCluster = {}; }
+      const cid = String(L.clip_id[i]), lk = this.liveKeys(), keys = W.linkData.readings[reading].osc_keys.concat(lk.keys);
+      const args = [reading, cid];
+      for (const k of keys) {
+        const name = k[0], pr = this.page.probes[name];
+        let v = pr ? pr.values[i] : L.kv[name] != null ? L.kv[name][i] : 0;
+        args.push(name, k[1] === "symbol" ? Math.round(v) : +v);
+      }
+      this._send("/dmc/row", args);
+      const c = rd.c[i];
+      if (c !== this.lastCluster) {
+        this.event("E1", "cluster_enter", `${reading}.cluster`, c, cid);
+        const vc = (this.visitsCluster[reading] = this.visitsCluster[reading] || {}); vc[c] = (vc[c] || 0) + 1;
+        this.event("E6", vc[c] === 1 ? "first_visit" : "revisit", `${reading}.cluster`, c, cid);
+        this.lastCluster = c;
+      }
+      if (rd.o[i]) this.event("E3", "outlier", `${reading}.outlier_score`, +rd.os[i], cid);
+      const n = (this.visitsClip[cid] || 0) + 1; this.visitsClip[cid] = n;
+      this.event("E6", n === 1 ? "first_visit" : "revisit", "clip", n, cid);
+      const fl = L.flags || {};
+      if (fl.novelty_peak && fl.novelty_peak.includes(i)) this.event("E5", "novelty", "delta.novelty", +((L.kv["delta.novelty"] || [])[i] ?? 1), cid);
+      if (fl.section_start && fl.section_start.includes(i)) this.event("E5", "boundary", "section.index", Math.round((L.kv["section.index"] || [])[i] ?? 0), cid);
+      if (kind === "trace") this.event("E7", "trace_step", "trace", step | 0, cid);
+      else if (kind === "follow" || kind === "step") this.event("E7", "step", "track.clip_index", step != null ? step | 0 : i, cid);
+      const mk = this.page.markers[cid]; if (mk) this.event("E8", "marker", mk.name, mk.n, cid);
+      const tr = D.tracks[L.file[i]];
+      this._send("/dmc/clip", [cid, tr.rel_path, +L.t0[i], +L.t1[i], 0.8, c, +rd.x[i] * 2 - 1]);
+      this.scheduleE4(tr.file_id, L.t0[i], L.t1[i], cid);
+    }
+    scheduleE4(fileId, t0, t1, cid) {
+      for (const h of this.e4) clearTimeout(h); this.e4 = [];
+      const q = this.fam("E4"), ev = W.linkData.events_e4[fileId];
+      if (!(this.enabled && q.enabled && ev)) return;
+      if (q.onsets !== false) ev.onset_t.forEach((t, k) => { if (t >= t0 && t < t1 && ev.onset_s[k] >= (q.min_strength ?? 0.1)) this.e4.push(setTimeout(() => this._send("/dmc/event", ["onset", "rhythm.onset", +ev.onset_s[k], cid]), (t - t0) * 1000)); });
+      if (q.beats !== false) { let k = 0; for (const t of ev.beat_t) if (t >= t0 && t < t1) { const kk = k++; this.e4.push(setTimeout(() => this._send("/dmc/event", ["beat", "rhythm.beat", kk, cid]), (t - t0) * 1000)); } }
+    }
+    pump() {                                                    // bridge.pump, at 20 Hz; rows at most this.rate
+      const t = now();
+      if (t - (this.lastFlush || 0) >= 1 / this.rate) { this.flush(); this.lastFlush = t; }
+      if (!this.enabled || !this.ws || this.ws.readyState !== 1) return;
+      if (this.reannounce) { this.reannounce = false; this.announce(); }
+      else if (!this.connected && t - this.lastHello > 2) this.announce();
+      else if (t - this.lastFull > 15) this.announce();
+      else if (this.connected && t - this.lastHello > 5) { this._send("/dmc/hello", [W.linkData.set_id, W.linkData.version]); this.lastHello = t; }
+    }
+    status() {
+      return { type: "live", enabled: this.enabled, host: this.host, port: this.port, connected: this.connected, ack_set: this.ackSet,
+               msgs_per_s: this.msgsPerS(), rate: this.rate, reading: this.reading, transport: this.transport || null,
+               since_ack_s: this.lastAck ? +(now() - this.lastAck).toFixed(1) : null, web: this.wsState, hub: this.hub };
+    }
+  }
+
+  // ------------------------------------------------------------------ the page's "bridge" socket
+  class PageSocket {
+    constructor() {
+      this.readyState = 0; this.onopen = this.onmessage = this.onclose = this.onerror = null;
+      this.markers = {}; this.probes = {}; page = this;
+      W.ready.then(() => {
+        this.markers = LS.get(`markers.${W.data.corpus_name}`, {});
+        this.link = W.link = new Link(this);
+        this.readyState = 1; this.onopen && this.onopen({});
+        this.push({ type: "hello", version: W.data.version, warm: true });
+        this.push(this.link.status());
+      });
+    }
+    push(m) { if (this.readyState === 1 && this.onmessage) setTimeout(() => this.onmessage({ data: JSON.stringify(m) }), 0); }
+    close() {}
+    send(raw) {
+      let m; try { m = JSON.parse(raw); } catch (_) { return; }
+      const L = this.link, D = W.data;
+      switch (m.type) {
+        case "nav": L.nav(m.reading, m.idx, m.kind || "hover", m.step); break;
+        case "reading":
+          if (L.enabled) { L.announceReading(m.name); const k = D.readings.indexOf(m.name); if (k >= 0) L.event("E7", "reading", m.name, k, ""); }
+          else L.reading = m.name;
+          break;
+        case "zoom": L.event("E7", "zoom", "map", +(m.k ?? 1), ""); break;
+        case "marker": {
+          const cid = D.levels.l1.clip_id[m.idx | 0];
+          if (m.remove) delete this.markers[cid];
+          else { const n = Object.keys(this.markers).length + 1;
+                 this.markers[cid] = { name: m.name || `m${n}`, n, t: new Date().toISOString().slice(0, 19).replace("T", " ") };
+                 L.event("E8", "marker", this.markers[cid].name, this.markers[cid].n, cid); }
+          LS.set(`markers.${D.corpus_name}`, this.markers);
+          this.push({ type: "markers", markers: this.markers });
+          break;
+        }
+        case "markers": this.push({ type: "markers", markers: this.markers }); break;
+        case "probe": this.probe(m); break;
+        case "live": L.configure(m); this.push(L.status()); break;
+        case "recompute":
+          if (W.mode === "own") recompute(m);
+          else this.push({ type: "job", state: "error", error: "the demo is precomputed: load your own corpus (◫ your corpus) to recompute" });
+          break;
+        case "undo": case "defaults":
+          this.push({ type: "job", state: "error", error: "not available in the web version yet" }); break;
+        case "cancel": break;
+      }
+    }
+    probe(m) {                                                   // S9: reference clip (MIR space, centred) — CLAP and text later
+      try {
+        if (m.clear) { delete this.probes[m.name]; this.link.announceLive(); return this.push({ type: "probe", name: m.name, desc: "", values: null }); }
+        if (m.text != null) throw new Error("the text probe needs the CLAP text model, which this page does not load yet");
+        const L = W.data.levels.l1, feats = Object.keys(L.feats), n = L.n, ref = m.ref | 0;
+        const A = feats.map((k) => { const v = L.feats[k], s = v.slice().sort((a, b) => a - b), med = s[n >> 1]; let sd = 0, mu = 0;
+          for (const x of v) mu += x; mu /= n; for (const x of v) sd += (x - mu) ** 2; sd = Math.sqrt(sd / n) + 1e-9; return v.map((x) => (x - med) / sd); });
+        const norm = new Float64Array(n); for (let i = 0; i < n; i++) { let s = 0; for (const c of A) s += c[i] * c[i]; norm[i] = Math.sqrt(s) + 1e-9; }
+        const vals = new Array(n); for (let i = 0; i < n; i++) { let s = 0; for (const c of A) s += c[i] * c[ref]; vals[i] = +(s / (norm[i] * norm[ref])).toFixed(4); }
+        const name = "probe.reference", desc = `cosine similarity (live features, centred) to the reference clip ${L.clip_id[ref]}`;
+        let mn = Infinity, mx = -Infinity, mu = 0; for (const v of vals) { mn = Math.min(mn, v); mx = Math.max(mx, v); mu += v; } mu /= n;
+        let sd = 0; for (const v of vals) sd += (v - mu) ** 2; sd = Math.sqrt(sd / n);
+        this.probes[name] = { values: vals, desc, key: [name, "signal", mn, mx, mu, sd, 0, -1, "S9"] };
+        this.link.announceLive();
+        this.push({ type: "probe", name, desc, values: vals });
+      } catch (e) { this.push({ type: "probe", error: String(e.message || e) }); }
+    }
+  }
+
+  // ------------------------------------------------------------------ your corpus: decode here, analyse in the worker
+  const AUDIO_EXT = /\.(wav|aiff?|flac|mp3|m4a|ogg|opus)$/i;
+  let worker = null, page = null, lastConfig = null;
+  function engine() {
+    if (!worker) worker = new Worker(url("core/engine.js"), { type: "module" });
+    return worker;
+  }
+  function note(html, done) {
+    let el = document.getElementById("web-progress");
+    if (!el) { el = document.createElement("div"); el.id = "web-progress";
+      el.style.cssText = "position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:20;padding:8px 14px;border-radius:6px;font:12px/1.4 var(--ui,system-ui);background:var(--panel,#1c1a24);color:var(--ink,#eee);box-shadow:0 6px 24px rgba(0,0,0,.35);max-width:min(560px,90vw)";
+      document.body.appendChild(el); }
+    el.innerHTML = html; el.hidden = false; if (done) setTimeout(() => { el.hidden = true; }, 6000);
+  }
+  function runWorker(msg, onProgress) {
+    return new Promise((res, rej) => {
+      const w = engine();
+      w.onmessage = (ev) => { const m = ev.data;
+        if (m.type === "progress") onProgress && onProgress(m);
+        else if (m.type === "done") res(m); else if (m.type === "error") rej(new Error(m.error)); };
+      w.postMessage(msg);
+    });
+  }
+  function adopt(r, files) {
+    W.data = r.payload; W.linkData = r.link; W.mode = "own";
+    W.clipRow = new Map(r.payload.levels.l1.clip_id.map((c, i) => [c, i]));
+    W.clipAt = new Map(r.payload.levels.l1.clip_id.map((c, i) => [`${r.payload.levels.l1.file[i]}@${(+r.payload.levels.l1.t0[i]).toFixed(3)}`, c]));
+    if (files) { OWN.files = files; OWN.decoded.clear(); for (const u of W.audio.urls.values()) URL.revokeObjectURL(u); W.audio.urls.clear(); }
+    W.audio.mode = "own";
+    if (page) { page.markers = LS.get(`markers.${r.payload.corpus_name}`, {}); page.probes = {}; if (page.link && page.link.enabled) page.link.announce(); }
+  }
+  async function analyseFolder(list) {
+    const all = Array.from(list).filter((f) => AUDIO_EXT.test(f.name)).sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
+    if (!all.length) { note("no audio files in that folder (wav, aif, flac, mp3, m4a, ogg)", true); return; }
+    const root = (all[0].webkitRelativePath || "").split("/")[0] || "your_corpus";
+    const t0 = performance.now(), ctx = new AudioContext(), w = engine(), files = [];
+    w.postMessage({ type: "reset" });
+    const unplayable = all.filter((f) => /\.(ogg|opus)$/i.test(f.name)).length;
+    let i = 0;
+    for (const f of all) {
+      const rel = (f.webkitRelativePath || f.name).split("/").slice(1).join("/") || f.name;
+      note(`reading <b>${i + 1}/${all.length}</b> · ${rel}`);
+      try {
+        const dec = await ctx.decodeAudioData(await f.arrayBuffer());
+        const off = new OfflineAudioContext(1, Math.ceil(dec.duration * 22050), 22050), src = off.createBufferSource();
+        src.buffer = dec; src.connect(off.destination); src.start();
+        const y = (await off.startRendering()).getChannelData(0);
+        const k = files.length; files.push(f);
+        await runWorkerFile({ type: "file", i: k, total: all.length, name: f.name, rel_path: rel, folder: rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "", y }, y);
+      } catch (e) { console.warn("skipped", rel, e); }
+      i++;
+    }
+    ctx.close();
+    if (!files.length) { note("none of these files could be decoded by this browser", true); return; }
+    note(`analysing <b>${files.length}</b> files: maps, clusters, neighbours…`);
+    const cfg = Object.assign({}, lastConfig || W.data.config, { corpus_name: root.replace(/[^A-Za-z0-9_.-]/g, "_") });
+    const r = await runWorker({ type: "finish", config: cfg }, (m) => m.stage === "readings" && note(`analysing · ${m.sub || (m.reading + " · " + m.level)} · ${m.done}/${m.total}`));
+    adopt(r, files);
+    if (page) page.push({ type: "hello", version: r.payload.version });
+    note(`<b>${root}</b>: ${files.length} files, ${r.payload.levels.l1.n} clips, analysed in ${((performance.now() - t0) / 1000).toFixed(0)} s in this browser — nothing was uploaded.` +
+         ` In Live, set DMC Corpus's <b>root</b> to this same folder.` + (unplayable ? ` ${unplayable} ogg/opus file(s) will analyse here but Live cannot load them.` : ""), true);
+  }
+  function runWorkerFile(msg, y) {
+    return new Promise((res, rej) => { const w = engine();
+      w.onmessage = (ev) => { const m = ev.data; if (m.type === "progress" && m.stage === "features") res(); else if (m.type === "error") rej(new Error(m.error)); };
+      w.postMessage(msg, [y.buffer]); });
+  }
+  async function recompute(m) {                                   // the config panel's Apply, on your corpus
+    lastConfig = { phase2: m.phase2, readings: m.readings };
+    const t0 = performance.now();
+    page.push({ type: "job", state: "start" });
+    try {
+      const r = await runWorker({ type: "finish", config: Object.assign({}, lastConfig, { corpus_name: W.data.corpus_name }) }, (p) => {
+        if (p.stage === "readings") page.push({ type: "event", phase: "readings", ev: { type: "progress", stage: "readings", done: p.done, total: p.total, reading: p.reading || "", level: p.level || "", seconds: 0, cache_hits: {} } }); });
+      adopt(r);
+      const s = +((performance.now() - t0) / 1000).toFixed(1);
+      page.push({ type: "job", state: "done", version: r.payload.version, timings: { total: s, phase2: null, readings: s } });
+    } catch (e) { page.push({ type: "job", state: "error", error: String(e.message || e) }); }
+  }
+  document.addEventListener("DOMContentLoaded", () => {
+    const b = document.getElementById("web-corpus"), inp = document.getElementById("web-corpus-input");
+    if (b && inp) { b.onclick = () => inp.click(); inp.onchange = () => { if (inp.files.length) analyseFolder(inp.files).catch((e) => note("analysis failed: " + (e.message || e), true)); inp.value = ""; }; }
+  });
+  W.analyseFolder = analyseFolder;
+
+  const NATIVE_WS = window.WebSocket;
+  window.WebSocket = function (u, p) { return /:page$/.test(String(u)) ? new PageSocket() : new NATIVE_WS(u, p); };
+  Object.assign(window.WebSocket, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+})();

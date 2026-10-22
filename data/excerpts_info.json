@@ -1,0 +1,11 @@
+{
+ "clips": 3410,
+ "new_files": 3410,
+ "seconds": 17.0,
+ "opus_MB": 24.3,
+ "mp3_MB": 28.6,
+ "codec": {
+  "opus": "mono 24 kb/s",
+  "mp3": "mono MP3 32 kb/s"
+ }
+}

@@ -88,9 +88,19 @@ preprocessing, data processing, mapping utilities) and its web style kit (`darks
 
 ## Software: web UI
 
-- **D3.js v7** by Mike Bostock and contributors (ISC).
+- **D3.js v7** by Mike Bostock and contributors (ISC), vendored (v7.9.0).
 - The UI layout follows the Dark Sonification web interface pattern (right controls panel, left
   legend and config docks).
+
+## Software: the web tool (in the browser)
+
+- **umap-js** 1.4.0 by the PAIR team (Google), bundled with esbuild together with its dependencies
+  **ml-matrix** 6.15.1, **ml-levenberg-marquardt** 2.1.1, **ml-array-max/min/rescale** 2.0.0 and **is-any-array** 0.1.1 (all MIT).
+- The MIR features, segmentation, rhythm, scaling, k-means with silhouette, Isolation Forest, kNN and keys are a
+  JavaScript port of this project's engine (librosa 0.11 formulas; scikit-learn's algorithms), written for this page.
+- **Rubik** and **Karla** typefaces (SIL Open Font License 1.1), served by Google Fonts through the style kit.
+- Demo excerpts encoded with **FFmpeg** (libopus, LAME); the tool itself ships no FFmpeg code.
+- Hosting: **GitHub Pages**.
 
 ## Software: Max for Live devices and Live sets
 

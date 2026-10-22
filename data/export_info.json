@@ -1,0 +1,16 @@
+{
+ "exported": "2026-10-22 14:42:15",
+ "version": "1792672934825",
+ "label": "default",
+ "corpus_name": "sounding_numbers",
+ "n_clips": 3410,
+ "n_tracks": 8,
+ "readings": [
+  "mir_umap",
+  "clap_umap",
+  "mirclap_umap"
+ ],
+ "payload_bytes_gz": 469573,
+ "payload_sha16": "49991b87ea5bab5a",
+ "link_bytes": 134552
+}

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dark Music Corpus · about</title>
+<meta name="description" content="Navigate a music corpus of your own, by ear and by eye, and play it into Ableton Live.">
+<style>
+  :root { --bg: #f6efe6; --ink: #33203a; --ink-2: #6b5a70; --gold: #c6922c; --rule: #e3d8ca; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #14121a; --ink: #ece4f0; --ink-2: #a89bb0; --gold: #d9a640; --rule: #2b2733; } }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 16px 72px; }
+  h1 { font-weight: 300; font-size: 38px; margin: 0 0 6px; letter-spacing: -.01em; }
+  h2 { font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-2); margin: 36px 0 8px; font-weight: 600; }
+  p, li { margin: 0 0 10px; } ul { padding-left: 20px; } .meta { color: var(--ink-2); font-size: 15px; }
+  a { color: inherit; border-bottom: 2px solid var(--gold); text-decoration: none; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; } td { padding: 4px 8px 4px 0; border-top: 1px solid var(--rule); vertical-align: top; }
+</style></head>
+<body><main>
+  <p class="meta"><a href="./">← back to the tool</a></p>
+  <h1>Dark Music Corpus</h1>
+  <p>Navigate a music corpus of your own, by ear and by eye, and play it into Ableton Live.</p>
+  <p class="meta">Built with DarkSonification. Designed by Miguel Angel Crozzoli; implemented with Claude AI agents.
+     In collaboration with Christian Høgh (Rhythmic Music Conservatory, Copenhagen).</p>
+
+  <h2>What it does</h2>
+  <p>The tool cuts your audio into 2-second clips, describes each clip by its sound — spectral shape, loudness,
+     timbre (MFCC), pitch content (chroma) and rhythm — and lays the corpus out as a map: similar clips sit close
+     together, clusters group them, unusual clips are marked as outliers, and every clip knows its ten nearest
+     neighbours. Hover to listen; select, step and trace to move through the corpus.</p>
+  <p><b>Your audio never leaves your computer.</b> Press <b>◫ your corpus</b> and pick a folder: the analysis runs in
+     this browser tab. Nothing is uploaded.</p>
+  <p>The map you see first is a demo: the record <i>Sounding Numbers</i>, analysed beforehand.</p>
+
+  <h2>Playing into Ableton Live</h2>
+  <p>Download the Max for Live devices and the DMC Starter set from the
+     <a href="https://github.com/mCrozzoli/dark-music-corpus">project repository</a>. Put DMC Hub on the Master track,
+     set DMC Corpus's <b>root</b> to the same folder you picked here, then press <b>Ableton: link</b> in the sound panel.</p>
+  <ul>
+    <li><b>Chrome</b> asks once to allow access to devices on your local network: allow it.</li>
+    <li><b>Firefox</b> links directly.</li>
+    <li><b>Safari</b> explores and listens, but cannot link to Live: use Chrome or Firefox for that.</li>
+  </ul>
+
+  <h2>The demo audio</h2>
+  <p><i>Sounding Numbers</i> by Miguel Angel Crozzoli (Kairos KAI0022047, 2024). Performers: Miguel Angel Crozzoli,
+     Calum Builder, Jūra Elena Šedytė, Valeria Miracapillo, Ida Nørby, Johannes Nästesjö. The demo uses the eight v2
+     masters of <i>I Am The Forest</i> I–V and <i>I Am The Ocean</i> I–III.
+     <b>All rights reserved.</b> Only short, low-quality excerpts of each clip are published, for listening only;
+     the full tracks are not.</p>
+
+  <h2>Credits</h2>
+  <table>
+    <tr><td>Concepts</td><td>Thor Magnusson, <i>Sonic Writing</i> (2019) — the signal–symbol framework · M. A. Crozzoli et al., Dark Sonification, ICAD 2025 · Dietmar Offenhuber, <i>Autographic Design</i> (2023)</td></tr>
+    <tr><td>Methods</td><td>UMAP (McInnes, Healy, Melville 2018) · k-means with silhouette · Isolation Forest (Liu, Ting, Zhou 2008) · MIR features after librosa (McFee et al. 2015)</td></tr>
+    <tr><td>Model</td><td>CLAP <code>laion/larger_clap_music</code> by LAION (Apache-2.0; Wu et al., ICASSP 2023) — used by the desktop engine and the demo's precomputed readings</td></tr>
+    <tr><td>In this page</td><td>D3.js v7 (ISC) · umap-js 1.4 with ml-matrix and ml-levenberg-marquardt (MIT) · Rubik and Karla fonts (SIL OFL 1.1) · the Dark Sonification style kit</td></tr>
+    <tr><td>Devices</td><td>Max for Live (Cycling '74 / Ableton) · Ableton's <code>Abl.Map</code> / <code>Abl.MapUi</code>, inside the frozen devices</td></tr>
+    <tr><td>Hosting</td><td>GitHub Pages</td></tr>
+  </table>
+  <p class="meta">The full list, with every library and version: <a href="https://github.com/mCrozzoli/dark-music-corpus/blob/main/CREDITS.md">CREDITS.md</a>.
+     Code, devices and template: MIT. Audio: all rights reserved, © Miguel Angel Crozzoli.</p>
+</main></body></html>

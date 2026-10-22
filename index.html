@@ -1,19 +1,1224 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- dark_music_corpus — "Dark Sagas for music" (lab/PLAN.md Phase 4, lab/DESIGN.md §8).
+     Stage: a D3 map of the corpus clips (L1) or tracks (L0) under one reading; keys 1–6 morph between readings.
+     Right: controls · i (pinned INFORMATION + view · lens · sound · trace). Left: legend · L and config · C (the
+     re-tuning dock, apply · recompute through viz/bridge.py). Layout grammar, tokens and habits from dark_hugur/viz. -->
+<html lang="en">
+<head>
+<script src="web_bridge.js"></script>   <!-- web build: answers the page's /api calls and its bridge socket -->
+<meta charset="utf-8">
 <title>Dark Music Corpus</title>
 <meta name="description" content="Navigate a music corpus of your own, by ear and by eye, and play it into Ableton Live.">
+<link rel="stylesheet" href="darkstyle/darkstyle.css">
+<script src="darkstyle/darkstyle.js"></script>   <!-- the style kit: dark · light · paper (projects/web/style; synced copy) -->
+<script src="vendor/d3.v7.min.js"></script>
+<style id="dm-tokens">
+/* Tokens per look (kit rule 3). Dark = Dark Sagas' dark values; light/paper point at the kit. The cluster palette is
+   Sagas' six k-means hues + eight saga hues per look (each set validated there against its own ground), so a cluster
+   keeps its hue family across looks (kit rule 2). */
+:root, [data-theme="dark"] {
+  --dm-bg:#0b0a10; --dm-panel:#14121c; --dm-line:#262233; --dm-ink:#e9e4d8; --dm-dim:#867f96;
+  --dm-rubric:#c8323e; --dm-gold:#d8b45a; --dm-accent:#6a5bd0; --dm-ok:#4aa5a0;
+  --dm-ctl:#1c1928; --dm-tab-bg:#0d1020; --dm-dock-bg:rgba(10,13,22,0.97); --dm-hover:#1a2038;
+  --dm-lg-hover:#161c33; --dm-lg-held:#1d2544; --dm-row-hover:rgba(255,255,255,.05); --dm-txt-hi:#fff;
+  --dm-ring:#fff; --dm-noise:#4b4757; --dm-edge:none;
+  --dm-font:-apple-system,"Helvetica Neue",sans-serif; --dm-font-size:13px;
+  --c0:#5b8dd0; --c1:#d0685b; --c2:#7fbf6a; --c3:#c9a24a; --c4:#9a6ad0; --c5:#5bc4c9; --c6:#c8925a;
+  --c7:#5a9ac8; --c8:#c95bb8; --c9:#c9c35b; --c10:#d0685b; --c11:#5bc4c9; --c12:#7fbf6a; --c13:#9a6ad0;
+}
+[data-theme="light"] {
+  --dm-bg:var(--ds-bg); --dm-panel:var(--ds-panel); --dm-line:var(--ds-line); --dm-ink:var(--ds-txt); --dm-dim:var(--ds-dim);
+  --dm-rubric:#c92035; --dm-gold:#776a15; --dm-accent:#7533ce; --dm-ok:#0d9297;
+  --dm-ctl:var(--ds-ctl); --dm-tab-bg:var(--ds-panel); --dm-dock-bg:var(--ds-overlay); --dm-hover:var(--ds-ctl-hover);
+  --dm-lg-hover:var(--ds-ctl-hover); --dm-lg-held:var(--ds-chip-hold); --dm-row-hover:var(--ds-ctl-hover); --dm-txt-hi:var(--ds-txt-hi);
+  --dm-ring:var(--ds-txt-hi); --dm-noise:#b9b6c2; --dm-edge:1px solid var(--ds-edge);
+  --c0:#5479fd; --c1:#5c0202; --c2:#4a621b; --c3:#9a861b; --c4:#6c399f; --c5:#0d9297; --c6:#703600;
+  --c7:#00529d; --c8:#53004a; --c9:#9e8419; --c10:#b65a61; --c11:#347519; --c12:#8a70dd; --c13:#0d9297;
+}
+[data-theme="paper"] {
+  --dm-bg:var(--ds-bg); --dm-panel:var(--ds-panel); --dm-line:var(--ds-line); --dm-ink:var(--ds-txt); --dm-dim:var(--ds-dim);
+  --dm-rubric:#c92035; --dm-gold:#7e5402; --dm-accent:#7533ce; --dm-ok:#0d9297;
+  --dm-ctl:var(--ds-ctl); --dm-tab-bg:var(--ds-panel); --dm-dock-bg:var(--ds-overlay); --dm-hover:var(--ds-ctl-hover);
+  --dm-lg-hover:var(--ds-ctl-hover); --dm-lg-held:var(--ds-chip-hold); --dm-row-hover:var(--ds-ctl-hover); --dm-txt-hi:var(--ds-txt-hi);
+  --dm-ring:var(--ds-txt-hi); --dm-noise:#c9b8ab; --dm-edge:1px solid var(--ds-edge);
+  --dm-font:var(--ds-font-ui); --dm-font-size:var(--ds-font-size);
+  --c0:#5479fd; --c1:#5b0017; --c2:#445c14; --c3:#94800f; --c4:#8b17ae; --c5:#0d9297; --c6:#703600;
+  --c7:#0668c1; --c8:#53004a; --c9:#987e0c; --c10:#c4666c; --c11:#187037; --c12:#4f259e; --c13:#0d9297;
+}
+</style>
 <style>
-  :root { --bg: #f6efe6; --ink: #33203a; --ink-2: #6b5a70; --gold: #c6922c; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #14121a; --ink: #ece4f0; --ink-2: #a89bb0; --gold: #d9a640; } }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 18px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 640px; margin: 0 auto; padding: 72px 16px; }
-  h1 { font-weight: 300; font-size: 40px; margin: 0 0 12px; letter-spacing: -.01em; }
-  p { margin: 0 0 14px; } .meta { color: var(--ink-2); font-size: 15px; }
-  a { color: inherit; border-bottom: 2px solid var(--gold); text-decoration: none; }
-</style></head>
-<body><main>
-  <h1>Dark Music Corpus</h1>
-  <p>Navigate a music corpus of your own, by ear and by eye, and play it into Ableton Live. The analysis runs in your browser: your audio never leaves your computer.</p>
-  <p>The tool is in development and will open here.</p>
-  <p class="meta">Built with DarkSonification. Designed by Miguel Angel Crozzoli; implemented with Claude AI agents. In collaboration with Christian Høgh (Rhythmic Music Conservatory, Copenhagen). · <a href="https://github.com/mCrozzoli/dark-music-corpus">source</a></p>
-</main></body></html>
+:root{--bg:var(--dm-bg);--panel:var(--dm-panel);--line:var(--dm-line);--ink:var(--dm-ink);--dim:var(--dm-dim);
+  --rubric:var(--dm-rubric);--gold:var(--dm-gold);--accent:var(--dm-accent)}
+*{box-sizing:border-box;margin:0;padding:0}
+body.freeze *{transition:none !important}
+html,body{height:100%;background:var(--bg);color:var(--ink);font:var(--dm-font-size)/1.45 var(--dm-font);overflow:hidden}
+#stage-wrap{position:absolute;inset:0}
+#stage{width:100%;height:100%;display:block}
+header{position:absolute;top:0;left:0;right:0;height:40px;display:flex;gap:14px;align-items:center;padding:0 14px;z-index:5;
+  background:linear-gradient(var(--bg),transparent);pointer-events:none}
+header>*{pointer-events:auto}
+header b{font-weight:600;letter-spacing:.14em;font-size:12px;color:var(--dim)}
+.tab{color:var(--dim);cursor:pointer;font-size:12px;letter-spacing:.06em;padding:3px 7px;border-radius:3px}
+.tab.on{color:var(--ink);background:var(--panel)}
+#hdr-reading{font-size:12px;letter-spacing:.08em;color:var(--ink)}
+#chip{margin-left:auto;font-size:10px;letter-spacing:.1em;color:var(--dim)}
+#chip.live{color:var(--dm-ok)}
+body.side-open header #chip{margin-right:250px}
+/* ------- bottom strip: transport + the track's timeline ------- */
+#strip{position:absolute;left:0;right:0;bottom:0;height:46px;z-index:5;display:flex;align-items:center;gap:10px;padding:0 14px;
+  background:linear-gradient(transparent,var(--bg) 45%)}
+#strip svg{flex:1;height:30px;cursor:pointer}
+#transport{display:flex;gap:3px;align-items:center}
+.tp{background:var(--dm-ctl);border:1px solid var(--line);color:var(--dim);font:10px var(--dm-font);letter-spacing:.06em;
+  padding:2px 7px;border-radius:4px;cursor:pointer;line-height:1.3;white-space:nowrap}
+.tp:hover{color:var(--ink);border-color:var(--accent)} .tp.on{color:var(--ink);border-color:var(--accent)}
+#strip-label{font-size:10px;letter-spacing:.06em;color:var(--dim);white-space:nowrap;min-width:150px;text-align:right}
+body.legend #strip,body.config #strip{left:500px}
+body.side-open #strip{right:250px}
+/* ------- right panel ------- */
+#side{position:absolute;top:0;right:0;bottom:0;width:250px;background:var(--panel);border-left:1px solid var(--line);z-index:7;
+  padding:46px 12px 12px;transform:translateX(100%);transition:transform .45s ease;overflow-y:auto}
+#side.open{transform:none}
+#side-tab{position:absolute;top:50%;right:0;z-index:6;color:var(--dim);cursor:pointer;font-size:10px;letter-spacing:.12em;
+  writing-mode:vertical-rl;padding:8px 3px;background:var(--panel);border:1px solid var(--line);border-right:none;
+  border-radius:4px 0 0 4px;transition:right .45s ease}
+body.side-open #side-tab{right:250px;z-index:8}
+.lg-x{position:absolute;top:10px;right:12px;cursor:pointer;color:var(--dim)} .lg-x:hover{color:var(--ink)}
+.seglabel{font-size:10px;letter-spacing:.16em;color:var(--dim);margin:14px 0 6px}
+.seglabel:first-child{margin-top:0}
+.seglabel span{font-weight:400;letter-spacing:.04em}
+#hear{font-size:11px;line-height:1.45;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin:0 0 8px;color:var(--ink);
+  background:var(--dm-ctl);box-sizing:content-box;height:2.9em;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+#hear.off{color:var(--dim)} #hear b{font-weight:600}
+#info-sel{font-size:11px;color:var(--dim);line-height:1.5}
+#info-sel b{color:var(--ink);font-weight:600}
+#info-sel table{border-collapse:collapse;width:100%;margin:4px 0}
+#info-sel td{padding:0 2px;font-variant-numeric:tabular-nums}
+#info-sel td.v{color:var(--ink);text-align:right}
+.nb{display:flex;gap:6px;align-items:center;cursor:pointer;padding:1px 3px;border-radius:3px;white-space:nowrap;overflow:hidden}
+.nb:hover{background:var(--dm-row-hover);color:var(--ink)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}
+#side-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:12px 0 10px;padding-top:12px;border-top:1px solid var(--line)}
+.stab{text-align:center;font-size:11px;padding:5px 0;border:1px solid var(--line);border-radius:6px;color:var(--dim);cursor:pointer;user-select:none}
+.stab:hover{color:var(--ink)} .stab.on{color:var(--ink);background:var(--dm-ctl);border-color:var(--accent);font-weight:600}
+.tsec{display:none} .tsec.on{display:block}
+.wcgrid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:4px}
+.wcgrid .full{grid-column:1/-1}
+.wbtn{background:var(--dm-ctl);border:1px solid var(--line);color:var(--ink);font-size:11px;padding:6px 4px;border-radius:4px;cursor:pointer;font-family:inherit}
+.wbtn:hover{border-color:var(--accent)} .wbtn:active{background:var(--accent)} .wbtn.on{border-color:var(--accent);color:var(--ink)}
+.wbtn:disabled{opacity:.4;cursor:default}
+.lay{margin:2px 2px 2px 0}
+.note{font-size:10px;color:var(--dim);margin-top:3px;line-height:1.5}
+.fader{display:grid;grid-template-columns:62px 1fr 36px;gap:6px;align-items:center;margin:4px 0;font-size:11px}
+.fader input{width:100%;accent-color:var(--accent)}
+.fader .fv{color:var(--dim);text-align:right;font-size:10px;font-variant-numeric:tabular-nums}
+.chips{display:flex;flex-wrap:wrap;gap:3px;margin:3px 0}
+.qchip{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:10px;padding:1px 8px;cursor:pointer;user-select:none}
+.qchip:hover{color:var(--ink);border-color:var(--rubric)}
+.qchip.active{color:var(--ink);border-color:var(--rubric);background:rgba(200,50,62,.18)}
+select.sel,input.inp{background:var(--dm-ctl);border:1px solid var(--line);color:var(--ink);font:11px var(--dm-font);padding:3px 5px;border-radius:3px;outline:none}
+select.sel:focus,input.inp:focus{border-color:var(--accent)}
+.wcgrid input.inp,.wcgrid select.sel{width:100%;min-width:0}
+#live-state{font-size:11px;line-height:1.5;color:var(--dim)} #live-state b{color:var(--ink)} #live-state .ok{color:var(--dm-ok)} #live-state .bad{color:var(--rubric)}
+.tr-row{display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0}
+.tr-row .nm{flex:1;cursor:pointer;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tr-row .nm:hover{color:var(--gold)}
+body.brushing #stage-wrap{cursor:crosshair}
+/* ------- left docks: legend · L and config · C (they exclude each other, as Sagas' legend and text) ------- */
+#legend-tab,#config-tab{position:absolute;top:50%;left:0;z-index:6;color:var(--dim);cursor:pointer;writing-mode:vertical-rl;
+  transform:rotate(180deg) translateY(50%);font-size:10px;letter-spacing:.14em;padding:10px 4px;background:var(--dm-tab-bg);
+  border:1px solid var(--line);border-left:0;border-radius:0 0 6px 6px}
+#legend-tab:hover,#config-tab:hover{color:var(--ink)}
+#config-tab{top:calc(50% + 92px)}
+#config-tab.dirty::after{content:" ●";color:var(--gold)}
+#legend-panel,#config-panel{position:absolute;left:0;top:0;bottom:0;width:500px;z-index:9;background:var(--dm-dock-bg);border-right:var(--dm-edge);
+  padding:16px 18px 26px;overflow-y:auto;display:none;font-size:12px;color:var(--ink);line-height:1.45}
+body.legend #legend-panel{display:block} body.config #config-panel{display:block}
+body.legend #legend-tab,body.legend #config-tab,body.config #legend-tab,body.config #config-tab{display:none}
+.lg-title{font-size:13px;letter-spacing:.16em;color:var(--ink);margin:0 0 2px}
+.lg-terse{font-size:10.5px;color:var(--dim);margin:0 0 12px}
+.lg-h{font-size:9.5px;letter-spacing:.15em;color:var(--dim);text-transform:uppercase;margin:14px 0 6px;border-top:1px solid var(--line);padding-top:9px}
+.lg-row{display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer;user-select:none}
+.lg-row:hover{background:var(--dm-lg-hover)} .lg-row.held{background:var(--dm-lg-held)}
+.lg-row .lgn{color:var(--ink);white-space:nowrap;min-width:70px}
+.lg-row .lgs{color:var(--dim);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.lg-row .lgdot{width:9px;height:9px;border-radius:50%;flex:none;align-self:center}
+.lgchip{flex:none;font-size:10.5px;line-height:1.3;padding:1px 7px;border-radius:9px;color:var(--ink);background:var(--dm-ctl);border:1px solid var(--line);cursor:pointer}
+.lgchip:hover{border-color:var(--gold)}
+.lg-see{display:grid;grid-template-columns:26px 1fr;gap:4px 8px;align-items:center;font-size:11px;color:var(--ink)}
+table.cmp{border-collapse:collapse;font-size:10.5px;width:100%;font-variant-numeric:tabular-nums}
+table.cmp th{color:var(--dim);font-weight:400;text-align:right;padding:2px 4px;font-size:9.5px;letter-spacing:.04em}
+table.cmp td{text-align:right;padding:2px 4px;border-top:1px solid var(--line)}
+table.cmp td:first-child,table.cmp th:first-child{text-align:left}
+table.cmp tr.on td{color:var(--gold)}
+table.cmp td.best{font-weight:700}
+/* config dock */
+.tx-status{font-size:11px;color:var(--gold);letter-spacing:.04em;line-height:1.45;height:2.9em;overflow:hidden;margin:0 0 6px;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.tx-status.err{color:var(--rubric)}
+#cf-bar{display:block;height:2px;width:0;margin:-6px 0 -2px;background:var(--gold);border-radius:1px;transition:width .3s ease}
+#cf-stages{display:flex;flex-wrap:wrap;gap:3px;margin:8px 0 2px}
+.stg{font-size:9.5px;letter-spacing:.06em;padding:1px 6px;border-radius:8px;border:1px solid var(--line);color:var(--dim)}
+.stg.run{border-color:var(--gold);color:var(--gold)} .stg.done{color:var(--ink);border-color:var(--accent)} .stg.skip{opacity:.5}
+.tx-knob{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;margin:5px 0 1px;font-size:12px;color:var(--ink)}
+.tx-knob input,.tx-knob select{background:var(--dm-ctl);border:1px solid var(--line);color:var(--ink);font:12px var(--dm-font);padding:2px 6px;border-radius:3px;width:120px}
+.tx-knob input[type=checkbox]{width:auto;accent-color:var(--accent);justify-self:end;margin:0 4px}
+.tx-knob input:focus,.tx-knob select:focus{border-color:var(--accent);outline:none}
+.tx-note{font-size:10px;color:var(--dim);line-height:1.5;margin:2px 0 6px}
+.k-sugg{color:var(--gold);font-size:10px}
+.grp{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;margin:4px 0}
+.grp label{display:flex;gap:4px;align-items:center;cursor:pointer}
+.grp input{accent-color:var(--accent)}
+.rd{border:1px solid var(--line);border-radius:6px;padding:4px 8px 6px;margin:6px 0}
+.rd>summary{cursor:pointer;font-size:12px;color:var(--ink);list-style:none;display:flex;gap:8px;align-items:center}
+.rd>summary::-webkit-details-marker{display:none}
+.rd>summary .k{color:var(--dim);font-size:10px}
+.rd>summary .x{margin-left:auto;color:var(--dim);cursor:pointer;padding:0 4px} .rd>summary .x:hover{color:var(--rubric)}
+.rd .sub{font-size:9.5px;letter-spacing:.12em;color:var(--dim);margin:8px 0 2px;text-transform:uppercase}
+#config-panel{padding-bottom:0}
+.tx-foot{position:sticky;bottom:0;background:var(--dm-dock-bg);padding:8px 0 22px;margin-top:12px;border-top:1px solid var(--line)}
+#cf-apply.edited{border-color:var(--gold);color:var(--gold)}
+#cf-cancel{display:none} #cf-cancel.on{display:block}
+#config-panel.busy .cf-form{pointer-events:none;opacity:.6}
+[data-theme="paper"] #side,[data-theme="paper"] #legend-panel,[data-theme="paper"] #config-panel{background-image:var(--ds-grain)}
+svg .lbl{font:11px var(--dm-font);fill:var(--ink);paint-order:stroke;stroke:var(--bg);stroke-width:3px;pointer-events:none}
+#tip{position:absolute;pointer-events:none;z-index:12;font-size:10.5px;color:var(--ink);background:var(--dm-dock-bg);border:1px solid var(--line);
+  border-radius:4px;padding:2px 7px;display:none;white-space:nowrap}
+.lgpages{display:flex;gap:4px;margin:0 0 8px}
+.kfam{font:9.5px var(--dm-font);letter-spacing:.06em;color:var(--gold);border:1px solid var(--line);border-radius:7px;padding:0 5px;flex:none}
+.krow{display:grid;grid-template-columns:34px 1fr 120px 22px 22px;gap:6px;align-items:center;padding:3px 4px;border-radius:5px}
+.krow:hover{background:var(--dm-lg-hover)}
+.krow .kn{color:var(--ink);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.krow .kd{grid-column:2/-1;font-size:9.5px;color:var(--dim);line-height:1.35;margin-top:-2px}
+.krow svg{display:block}
+.krow .lgchip{padding:0 5px;text-align:center}
+.kwarn{font-size:10px;color:var(--rubric);line-height:1.4;margin:4px 0}
+.famrow>summary{font-size:11.5px}
+.famrow>summary .code{color:var(--gold);font-size:10px;min-width:26px}
+.famrow>summary input{accent-color:var(--accent)}
+.famrow .st{margin-left:auto;font-size:9.5px;color:var(--dim)}
+.famrow textarea{width:100%;background:var(--dm-ctl);border:1px solid var(--line);color:var(--ink);font:11px var(--dm-font);border-radius:3px;padding:3px 5px;min-height:44px}
+#unlock{position:absolute;left:50%;top:48px;transform:translateX(-50%);z-index:8;font-size:11px;color:var(--gold);letter-spacing:.06em;cursor:pointer}
+</style>
+</head>
+<body>
+<header>
+  <b>DARK MUSIC CORPUS</b>
+  <span id="hdr-reading">…</span>
+  <span class="tab" id="lv-l1" title="clips (L1) · key V toggles">clips</span>
+  <span class="tab" id="lv-l0" title="tracks (L0) · key V toggles">tracks</span>
+  <span class="tab" id="zoom-reset" title="reset view (0)">⌖</span>
+  <span class="tab" id="web-corpus" title="analyse a folder of your own audio in this browser — nothing is uploaded">◫ your corpus</span><a class="tab" href="about.html" title="what this is, the Live link, the demo audio, credits" style="text-decoration:none;color:inherit">about</a><input type="file" id="web-corpus-input" webkitdirectory multiple hidden>
+  <span id="chip">no bridge</span>
+</header>
+<div id="stage-wrap"><svg id="stage"></svg></div>
+<div id="tip"></div>
+<div id="unlock" hidden>click anywhere to let the browser sound</div>
+
+<div id="strip">
+  <div id="transport">
+    <button class="tp" id="tp-prev" title="the previous clip in this track (←)">◀</button>
+    <button class="tp" id="tp-next" title="the next clip in this track (→)">▶</button>
+    <button class="tp" id="tp-play" title="play the track on from the selected clip; the map follows (space)">▷ play on</button>
+  </div>
+  <svg id="strip-svg"></svg>
+  <div id="strip-label">—</div>
+</div>
+
+<div id="legend-tab" onclick="toggleDock('legend')">legend · L</div>
+<div id="legend-panel">
+  <div class="lg-x" onclick="toggleDock('legend')" title="close (L)">✕</div>
+  <div class="lg-title">LEGEND · the reading, its clusters and its keys</div>
+  <div class="lg-terse" id="lg-terse">…</div>
+  <div class="lgpages"><span class="qchip active" data-lg="clusters">clusters · see · compare</span><span class="qchip" data-lg="keys">keys</span></div>
+  <div id="lg-keys" hidden></div>
+  <div id="lg-main">
+  <div class="lg-h" id="lg-clusters-h">CLUSTERS</div>
+  <div id="lg-clusters"></div>
+  <div class="tx-note">click a row: hear the cluster's medoid (the clip nearest its centre on the map) · ◀ ▶ step through its clips, typical first</div>
+  <div class="lg-h">SEE · one line per visual encoding</div>
+  <div class="lg-see" id="lg-see"></div>
+  <div class="lg-h">THE READINGS COMPARED · clips (L1)</div>
+  <div id="lg-cmp"></div>
+  <div class="tx-note" id="lg-cmp-note"></div>
+  </div>
+</div>
+
+<div id="config-tab" onclick="toggleDock('config')">config · C</div>
+<div id="config-panel">
+  <div class="lg-x" onclick="toggleDock('config')" title="close (C)">✕</div>
+  <div class="lg-title">CONFIG · re-tune the corpus and the readings</div>
+  <div class="lg-terse">edit, then apply: the engine recomputes only what changed (everything else is cached) · ● = edited, not applied</div>
+  <div id="cf-status" class="tx-status">…</div>
+  <div id="cf-bar"></div>
+  <div id="cf-stages"></div>
+  <div class="cf-form" id="cf-form"></div>
+  <div class="lg-h">PRESETS · lab/presets/</div>
+  <div class="wcgrid">
+    <input class="inp" id="pr-name" placeholder="preset name" spellcheck="false">
+    <button class="wbtn" id="pr-save" title="save the form (corpus, Phase 2 config, readings) as lab/presets/<name>.json">save preset</button>
+    <select class="sel" id="pr-list"><option value="">— presets —</option></select>
+    <button class="wbtn" id="pr-load" title="load a preset into the form (then apply)">load into the form</button>
+  </div>
+  <div class="tx-foot wcgrid">
+    <button class="wbtn full" id="cf-apply" disabled title="recompute from the form (Phase 2 only if the corpus or its config changed)">apply · recompute</button>
+    <button class="wbtn full" id="cf-cancel" title="stop this recompute · the picture in view is kept">stop</button>
+    <button class="wbtn" id="cf-undo" disabled title="back to the result before the last apply, instantly">undo</button>
+    <button class="wbtn" id="cf-default" title="the shipped configuration and its result, instantly">defaults</button>
+  </div>
+</div>
+
+<div id="side-tab" onclick="toggleSide()">controls · i</div>
+<div id="side">
+  <div class="lg-x" onclick="toggleSide()" title="close (i)">✕</div>
+  <div id="info">
+    <div class="seglabel">INFORMATION <span id="info-state">· standalone</span></div>
+    <div id="hear" class="off" title="what you hear now">…</div>
+    <div id="info-sel">hover the map to listen · click a point to select it</div>
+  </div>
+  <div id="side-tabs">
+    <div class="stab" data-tab="view" title="readings, level, colour, the look">view</div>
+    <div class="stab" data-tab="lens" title="neighbourhood dimming, outliers, filters">lens</div>
+    <div class="stab" data-tab="sound" title="browser audition and Ableton Live">sound</div>
+    <div class="stab" data-tab="trace" title="draw or record a path, play it back, save it">trace</div>
+  </div>
+  <div class="tsec" data-tab="view">
+    <div class="seglabel">READING · keys 1–6</div>
+    <div id="view-readings"></div>
+    <div class="note" id="view-reading-note"></div>
+    <div class="seglabel">LEVEL · V</div>
+    <div class="wcgrid"><button class="wbtn" id="v-l1">clips · L1</button><button class="wbtn" id="v-l0">tracks · L0</button></div>
+    <button class="wbtn" id="v-recentre" style="width:100%;margin-top:5px" title="bring the whole map back into view (0)">re-centre the map · 0</button>
+    <div class="seglabel">COLOUR BY</div>
+    <select class="sel" id="v-color" style="width:100%"></select>
+    <div class="note" id="color-info"></div>
+    <div class="seglabel">LOOK · T</div>
+    <div id="look"></div>
+  </div>
+  <div class="tsec" data-tab="lens">
+    <div class="seglabel">LENS</div>
+    <button class="wbtn" id="ln-dim" style="width:100%" title="with a clip selected, everything outside it and its 10 neighbours fades">neighbourhood dimming: on</button>
+    <button class="wbtn" id="ln-out" style="width:100%;margin-top:5px" title="mark this reading's outliers (IsolationForest / LOF) with a ring">outliers: hidden</button>
+    <div class="seglabel">FILTER · TRACKS</div>
+    <div class="chips" id="ln-tracks"></div>
+    <div class="seglabel">FILTER · CLUSTERS</div>
+    <div class="chips" id="ln-clusters"></div>
+    <button class="wbtn" id="ln-clear" style="width:100%;margin-top:6px">clear filters</button>
+    <div class="seglabel">PROBE · S9 distance keys</div>
+    <button class="wbtn" id="pb-ref" style="width:100%" title="every clip's similarity to the selected clip becomes the key probe.reference (colour by it, send it to Live)">◎ reference = the selected clip</button>
+    <div class="wcgrid" style="grid-template-columns:1fr 52px"><input class="inp" id="pb-text" placeholder="text prompt (CLAP)" spellcheck="false"><button class="wbtn" id="pb-textgo">probe</button></div>
+    <div class="note" id="pb-note">probe keys join the _live block (and colour by)</div>
+    <div class="note">filtered-out clips fade and can't be hovered · filters compose (track AND cluster)</div>
+  </div>
+  <div class="tsec" data-tab="sound">
+    <div class="seglabel">BROWSER AUDITION</div>
+    <button class="wbtn" id="sd-aud" style="width:100%" title="hover plays the clip in the page (WebAudio, exact window from the bridge)">audition: on</button>
+    <div class="fader"><span>volume</span><input type="range" id="sd-vol" min="0" max="1" step="0.01" value="0.8"><span class="fv" id="sd-vol-v">0.80</span></div>
+    <div class="seglabel">ABLETON LIVE · DMC HUB LINK</div>
+    <button class="wbtn" id="sd-live" style="width:100%" title="link this page to the DMC Hub in your Live set (ws://127.0.0.1:9002); Chrome asks once to allow local network access; Safari cannot link">Ableton: link off</button>
+    <div class="wcgrid" style="grid-template-columns:1fr 64px 52px">
+      <input class="inp" id="sd-host" value="127.0.0.1" spellcheck="false" readonly title="always this computer">
+      <input class="inp" id="sd-port" value="9002" title="the Hub's web port (its panel shows it)">
+      <button class="wbtn" id="sd-hostset">set</button>
+    </div>
+    <button class="wbtn" id="sd-hover" style="width:100%;margin-top:5px" title="off: Live follows what you select, step, trace or play on; on: every hover too (rate-limited by follow)">hover → Live: off</button>
+    <div id="live-state">—</div>
+    <div class="fader"><span>follow</span><input type="range" id="sd-rate" min="1" max="60" step="1" value="20"
+      title="at most this many /dmc/row + /dmc/clip per second; the latest navigation wins"><span class="fv" id="sd-rate-v">20/s</span></div>
+    <div class="note">select, step, a trace or play-on navigate Live (hover too with the toggle); Live gets the latest at this rate · clip paths are relative to the corpora root (<i>sounding_numbers/…</i>), DMC Corpus joins them to its root</div>
+  </div>
+  <div class="tsec" data-tab="trace">
+    <div class="seglabel">TRACE · <span id="tr-len">0 clips</span></div>
+    <div class="wcgrid">
+      <button class="wbtn" id="tr-rec" title="every clip you hover joins the trace (R)">● record: off</button>
+      <button class="wbtn" id="tr-draw" title="press-drag on the map draws a path; the clips under it become the trace (B)">◫ draw: off</button>
+      <button class="wbtn" id="tr-play" title="play the trace as a sequence: browser + Live (P)">▷ play</button>
+      <button class="wbtn" id="tr-clear">✕ clear</button>
+    </div>
+    <div class="fader"><span>rate</span><input type="range" id="tr-rate" min="0.5" max="8" step="0.5" value="2"><span class="fv" id="tr-rate-v">2/s</span></div>
+    <div class="seglabel">SAVE · darkdata/traces/</div>
+    <div class="wcgrid">
+      <input class="inp" id="tr-name" placeholder="trace name" spellcheck="false">
+      <button class="wbtn" id="tr-save">save</button>
+    </div>
+    <div id="tr-list"></div>
+    <div class="seglabel">MARKERS · E8 · <span id="mk-n">0</span></div>
+    <button class="wbtn" id="mk-add" style="width:100%" title="mark the selected clip (M): Live gets a marker event now and whenever you come back to it">◆ mark the selected clip · M</button>
+    <div id="mk-list"></div>
+    <div class="note">a trace is a list of clip ids, so it survives a recompute that keeps the segmentation</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ================================================================ state */
+const Q = new URLSearchParams(location.search);
+const S = {
+  D:null, level:"l1", ri:0, colorBy:"cluster", sel:-1, hover:-1, dim:true, showOut:false,
+  fTrack:new Set(), fCluster:new Set(), aud:true, vol:0.8,
+  live:{enabled:false, connected:false}, hoverLive:false, rec:false, draw:false, trace:[], playing:null, playOn:null,
+  form:null, applied:null, busy:false, connected:false, version:null,
+};
+let ws=null;
+const $ = id => document.getElementById(id);
+const fmtT = s => { s=Math.max(0,s); const m=Math.floor(s/60), r=Math.floor(s%60); return `${m}:${String(r).padStart(2,"0")}`; };
+const RNAME = () => S.D ? S.D.readings[S.ri] : "";
+const LV = () => S.D.levels[S.level];
+const R = () => LV().readings[RNAME()];
+const R1 = () => S.D.levels.l1.readings[RNAME()];
+function trackName(f){ return S.D.tracks[f].name.replace(/^I Am The /,"").replace(/ MASTER v2$/,""); }
+function trackLong(f){ return S.D.tracks[f].name; }
+
+/* ================================================================ look */
+const PAL=[];
+function applyLook(){
+  PAL.length=0;
+  for(let i=0;i<14;i++) PAL.push(DarkStyle.tok("--c"+i) || "#888");
+  PAL.noise = DarkStyle.tok("--dm-noise") || "#555";
+  if(S.D) { render(false,true); buildLegend(); strip(); showInfo(); }
+}
+function clusterColor(c, r){ r=r||R(); if(r.noise_class!=null && c===r.noise_class) return PAL.noise; return PAL[c%PAL.length]; }
+DarkStyle.onChange(applyLook);
+
+/* ================================================================ bridge */
+async function wsPort(){
+  if(Q.get("ws")) return Q.get("ws");
+  try{ const r=await fetch("/api/ports"); return (await r.json()).ws; }catch(e){ return null; }
+}
+async function connect(){
+  const port=await wsPort(); if(!port){ setTimeout(connect,2000); return; }
+  try{ ws=new WebSocket(`ws://127.0.0.1:${port}`); }catch(e){ setTimeout(connect,2000); return; }
+  ws.onopen=()=>{ S.connected=true; chip(); if(S.D) send({type:"reading", name:RNAME()}); send({type:"markers"}); };
+  ws.onclose=()=>{ S.connected=false; chip(); setTimeout(connect,2000); };
+  ws.onmessage=ev=>{ let m; try{ m=JSON.parse(ev.data); }catch(e){ return; } onMsg(m); };
+}
+function send(m){ if(ws && ws.readyState===1){ ws.send(JSON.stringify(m)); return true; } return false; }
+function chip(){
+  const c=$("chip");
+  c.textContent = S.live.enabled ? (S.live.connected ? "Live ✓" : "Live …") : "web";
+  c.classList.toggle("live", S.connected && S.live.enabled && S.live.connected);
+  $("info-state").textContent = "· in your browser";
+}
+function onMsg(m){
+  if(m.type==="live"){ S.live=m; liveState(); chip(); }
+  else if(m.type==="event") onEngineEvent(m);
+  else if(m.type==="job") onJob(m);
+  else if(m.type==="hello" && S.version && m.version!==S.version) loadData(true);
+  else if(m.type==="warm") cfStatusIdle();
+  else if(m.type==="markers"){ S.markers=m.markers||{}; markersList(); showInfo(); }
+  else if(m.type==="probe") onProbe(m);
+}
+
+/* ================================================================ data */
+async function loadData(morph){
+  const r = await fetch("/api/data"); const D = await r.json();
+  // precompute per-level helpers
+  for(const lv of ["l1","l0"]){
+    const L=D.levels[lv];
+    L.rms = L.feats["energy.rms"] || (L.kv && L.kv["energy.rms"]) || new Array(L.n).fill(0.05);
+    const mx = d3.max(L.rms)||1; L.size = L.rms.map(v=>Math.sqrt(Math.max(0,v)/mx));
+  }
+  const l1=D.levels.l1;
+  l1.byTrack = D.tracks.map(()=>[]);
+  for(let i=0;i<l1.n;i++) l1.byTrack[l1.file[i]].push(i);
+  for(const a of l1.byTrack) a.sort((p,q)=>l1.t0[p]-l1.t0[q]);
+  l1.clipIdx = new Map(l1.clip_id.map((c,i)=>[c,i]));
+  const prevSelClip = (S.D && S.sel>=0 && S.level==="l1") ? S.D.levels.l1.clip_id[S.sel] : null;
+  if(S.D && S.D.version!==D.version) S.probes={};
+  S.D=D; S.version=D.version;
+  if(S.ri>=D.readings.length) S.ri=0;
+  S.sel = prevSelClip!=null && l1.clipIdx.has(prevSelClip) ? l1.clipIdx.get(prevSelClip) : -1;
+  S.hover=-1; S.fCluster.clear();
+  S.applied = JSON.parse(JSON.stringify({corpus:D.corpus, phase2:D.config.phase2, readings:D.config.readings}));
+  normalizeReadings(S.applied.readings);
+  if(!S.form || !isDirty()) S.form = JSON.parse(JSON.stringify(S.applied));
+  buildViewReadings(); buildColorSelect(); buildLens(); buildLegend(); buildForm(); markDirty();
+  render(!morph); showInfo(); strip(); hear();
+  send({type:"reading", name:RNAME()});
+}
+
+/* ================================================================ stage */
+const svg=d3.select("#stage");
+const world=svg.append("g").attr("id","world");
+const gLinks=world.append("g"), gTrace=world.append("g"), gDots=world.append("g"), gOut=world.append("g"),
+      gRing=world.append("g"), gLbl=world.append("g"), gBrush=world.append("g");
+function dims(){ const r=$("stage-wrap").getBoundingClientRect(); return {W:r.width,H:r.height}; }
+const zoom=d3.zoom().scaleExtent([0.5,24])
+  .filter(ev => !S.draw && (ev.type==="wheel" || ev.type==="mousedown" || ev.type==="touchstart") && !ev.button)
+  .on("zoom", ev=>{ world.attr("transform", ev.transform); gDots.selectAll("circle").attr("stroke-width",0.6/ev.transform.k); })
+  .on("end", ev=>{ if(Math.abs(ev.transform.k-(S.lastZoomK||1))>0.05){ S.lastZoomK=ev.transform.k; send({type:"zoom", k:+ev.transform.k.toFixed(3)}); } });
+svg.call(zoom).on("dblclick.zoom",null);
+function resetZoom(){ svg.transition().duration(750).ease(d3.easeCubicInOut).call(zoom.transform, d3.zoomIdentity); }
+$("zoom-reset").onclick=resetZoom; $("v-recentre").onclick=resetZoom;
+function dockReserve(){ const b=document.body.classList; return (b.contains("legend")||b.contains("config")) ? 500 : 0; }
+function sideReserve(){ return document.body.classList.contains("side-open") ? 250 : 0; }
+let XY=[];                                   // world coords of the current level's points under the current reading
+function layout(){
+  const {W,H}=dims(), L=LV(), r=R();
+  const mxL=60+dockReserve(), mxR=60+sideReserve(), myT=60, myB=78;
+  const span=Math.max(50,W-mxL-mxR), vspan=Math.max(50,H-myT-myB);
+  XY = new Array(L.n);
+  for(let i=0;i<L.n;i++) XY[i]=[mxL + r.x[i]*span, myT + (1-r.y[i])*vspan];
+}
+function inPlay(i){
+  const L=LV();
+  if(S.fTrack.size && !S.fTrack.has(L.file[i])) return false;
+  if(S.fCluster.size && !S.fCluster.has(R().c[i])) return false;
+  return true;
+}
+let NB=new Set();
+function neighbours(i){
+  const r=R1(); if(i<0 || S.level!=="l1") return [];
+  const k=r.k, out=[]; for(let j=0;j<k;j++) out.push(r.knn[i*k+j]); return out;
+}
+function keyValues(name, level){
+  const L=S.D.levels[level||S.level];
+  if(S.probes && S.probes[name] && (level||S.level)==="l1") return S.probes[name].values;
+  return (L.kv && L.kv[name]) || L.feats[name] || null;
+}
+function keyMeta(name){
+  if(S.probes && S.probes[name]) return {name, kind:"signal", family:"S9", desc:S.probes[name].desc};
+  const K=S.D.keys||{live:[],readings:{}};
+  return K.live.find(k=>k.name===name) || Object.values(K.readings).flat().find(k=>k.name===name) || null;
+}
+function colorScale(){
+  const L=LV(), key=S.colorBy;
+  if(key==="cluster" || key==="track") return null;
+  const meta=keyMeta(key);
+  const vals = key==="outlier_score" ? R().os : key==="density" ? R().d : (keyValues(key)||new Array(L.n).fill(0));
+  if(meta && meta.kind==="symbol") return {vals, sym:true, sc:v=>PAL[Math.max(0,Math.round(v))%PAL.length], lo:0, hi:meta.n_classes-1};
+  const sorted=[...vals].sort((a,b)=>a-b), lo=d3.quantile(sorted,0.02), hi=d3.quantile(sorted,0.98);
+  const interp = DarkStyle.get()==="paper" ? DarkStyle.ramp(DarkStyle.paperRamps.ochre) : d3.interpolateViridis;
+  const sc=d3.scaleSequential(interp).domain([lo,hi]).clamp(true);
+  return {vals, sc, lo, hi};
+}
+function colorOf(i, cs){
+  if(S.colorBy==="cluster") return clusterColor(R().c[i]);
+  if(S.colorBy==="track") return PAL[LV().file[i] % PAL.length];
+  return cs.sc(cs.vals[i]);
+}
+function radius(i){ return S.level==="l0" ? 9 + 8*LV().size[i] : 1.4 + 3.6*LV().size[i]; }
+function opacity(i){
+  if(!inPlay(i)) return 0.05;
+  if(S.dim && S.sel>=0 && S.level==="l1") return (i===S.sel || NB.has(i)) ? 1 : 0.16;
+  return 0.85;
+}
+let delaunay=null, playIdx=[];
+function render(first, recolor){
+  if(!S.D) return;
+  $("tip").style.display="none";
+  layout();
+  NB=new Set(neighbours(S.sel));
+  const L=LV(), cs=colorScale(), idx=d3.range(L.n);
+  const g=gDots.selectAll("circle").data(idx, i=>S.level+":"+i);
+  g.exit().remove();
+  const en=g.enter().append("circle").attr("r",0).attr("cx",i=>XY[i][0]).attr("cy",i=>XY[i][1])
+    .attr("stroke","var(--bg)").attr("stroke-width",0.6);
+  const all=en.merge(g);
+  const t = (document.hidden || recolor) ? all : all.transition().duration(first?900:1200).ease(d3.easeCubicInOut);
+  t.attr("cx",i=>XY[i][0]).attr("cy",i=>XY[i][1]).attr("r",i=>radius(i))
+   .attr("fill",i=>colorOf(i,cs)).attr("opacity",i=>opacity(i));
+  // L0 labels
+  const lbl=gLbl.selectAll("text").data(S.level==="l0"? idx : [], i=>i);
+  lbl.exit().remove();
+  lbl.enter().append("text").attr("class","lbl").merge(lbl).text(i=>trackName(L.file[i]))
+     .transition().duration(first?0:1200).attr("x",i=>XY[i][0]+radius(i)+4).attr("y",i=>XY[i][1]+4);
+  playIdx = idx.filter(inPlay);
+  delaunay = d3.Delaunay.from(playIdx, i=>XY[i][0], i=>XY[i][1]);
+  outliers(); ring(); traceDraw(); colorInfo();
+  $("hdr-reading").textContent = `${S.ri+1} · ${RNAME()}`;
+}
+function outliers(){
+  const L=LV(), r=R(), idx=S.showOut ? d3.range(L.n).filter(i=>r.o[i] && inPlay(i)) : [];
+  const o=gOut.selectAll("circle").data(idx, i=>i);
+  o.exit().remove();
+  o.enter().append("circle").attr("fill","none").attr("stroke","var(--rubric)").attr("stroke-width",1.2)
+    .merge(o).attr("cx",i=>XY[i][0]).attr("cy",i=>XY[i][1]).attr("r",i=>radius(i)+3.5);
+}
+function ring(){
+  const sel = S.sel>=0 && S.level==="l1" ? [S.sel] : [];
+  const rr=gRing.selectAll("circle.sel").data(sel); rr.exit().remove();
+  rr.enter().append("circle").attr("class","sel").attr("fill","none").attr("stroke","var(--dm-ring)").attr("stroke-width",1.6)
+    .merge(rr).attr("cx",i=>XY[i][0]).attr("cy",i=>XY[i][1]).attr("r",i=>radius(i)+5);
+  const hv = S.hover>=0 && S.hover!==S.sel ? [S.hover] : [];
+  const hr=gRing.selectAll("circle.hov").data(hv); hr.exit().remove();
+  hr.enter().append("circle").attr("class","hov").attr("fill","none").attr("stroke","var(--gold)").attr("stroke-width",1.2)
+    .merge(hr).attr("cx",i=>XY[i][0]).attr("cy",i=>XY[i][1]).attr("r",i=>radius(i)+4);
+  const links = sel.length ? neighbours(S.sel).map(j=>[S.sel,j]) : [];
+  const ln=gLinks.selectAll("line").data(links, d=>d[1]); ln.exit().remove();
+  ln.enter().append("line").attr("stroke","var(--dm-ring)").attr("stroke-opacity",0.35).attr("stroke-width",0.8)
+    .merge(ln).attr("x1",d=>XY[d[0]][0]).attr("y1",d=>XY[d[0]][1]).attr("x2",d=>XY[d[1]][0]).attr("y2",d=>XY[d[1]][1]);
+}
+/* hover = audition; click = select; drag = pan (or draw a trace) */
+function pick(ev){
+  if(!delaunay || !playIdx.length) return -1;
+  const t=d3.zoomTransform(svg.node()), [mx,my]=d3.pointer(ev, svg.node()), p=t.invert([mx,my]);
+  const j=delaunay.find(p[0],p[1]); if(j<0) return -1;
+  const i=playIdx[j], dx=XY[i][0]-p[0], dy=XY[i][1]-p[1];
+  return Math.hypot(dx,dy)*t.k < 28 ? i : -1;
+}
+let lastHoverT=0;
+svg.on("mousemove", ev=>{
+  if(!S.D || S.draw) return;
+  const now=performance.now(); if(now-lastHoverT<45) return; lastHoverT=now;
+  const i=pick(ev); const tip=$("tip");
+  if(i<0){ tip.style.display="none"; return; }
+  tip.style.display="block"; tip.style.left=(ev.clientX+12)+"px"; tip.style.top=(ev.clientY+10)+"px";
+  if(S.level==="l0"){ tip.textContent=trackLong(LV().file[i]); if(i!==S.hover){ S.hover=i; const m=trackMedoid(LV().file[i]); if(m>=0) audition(m,"hover"); } return; }
+  const L=LV(); tip.textContent=`${trackName(L.file[i])} ${fmtT(L.t0[i])} · c${R().c[i]}`;
+  if(i!==S.hover){ S.hover=i; ring(); audition(i,"hover"); if(S.rec) traceAdd(i); }
+});
+svg.on("mouseleave", ()=>{ $("tip").style.display="none"; });
+svg.on("click", ev=>{
+  if(!S.D || S.draw || ev.defaultPrevented) return;
+  const i=pick(ev);
+  if(S.level==="l0"){ if(i>=0){ const m=trackMedoid(LV().file[i]); setLevel("l1"); if(m>=0) select(m); } return; }
+  if(i>=0) select(i);
+});
+function select(i, kind, step){
+  if(S.level!=="l1") setLevel("l1");
+  S.sel=i; NB=new Set(neighbours(i));
+  gDots.selectAll("circle").attr("opacity",j=>opacity(j));
+  ring(); showInfo(); strip(); audition(i, kind||"select", step);
+}
+function deselect(){ S.sel=-1; NB=new Set(); gDots.selectAll("circle").attr("opacity",j=>opacity(j)); ring(); showInfo(); strip(); }
+function trackMedoid(f){
+  const l1=S.D.levels.l1, r=R1(), ids=l1.byTrack[f]; if(!ids.length) return -1;
+  const mx=d3.mean(ids,i=>r.x[i]), my=d3.mean(ids,i=>r.y[i]);
+  return d3.least(ids, i=>(r.x[i]-mx)**2+(r.y[i]-my)**2);
+}
+function setReading(k){
+  if(!S.D || k<0 || k>=S.D.readings.length) return;
+  S.ri=k; S.fCluster.clear();
+  render(false); buildViewReadings(); buildLens(); buildLegend(); showInfo(); strip(); hear();
+  send({type:"reading", name:RNAME()});
+}
+function setLevel(lv){
+  if(S.level===lv) return; S.level=lv; S.hover=-1;
+  ["l1","l0"].forEach(x=>{ $("lv-"+x).classList.toggle("on",x===lv); $("v-"+x).classList.toggle("on",x===lv); });
+  gDots.selectAll("circle").remove(); render(true); buildLegend(); showInfo();
+}
+$("lv-l1").onclick=()=>setLevel("l1"); $("lv-l0").onclick=()=>setLevel("l0");
+$("v-l1").onclick=()=>setLevel("l1"); $("v-l0").onclick=()=>setLevel("l0");
+window.addEventListener("resize", ()=>{ if(S.D) render(false,true); strip(); });
+
+/* ================================================================ audio */
+let actx=null, master=null, voice=null;
+const BUF=new Map();                     // LRU of decoded clip buffers
+function audioCtx(){
+  if(!actx){ actx=new (window.AudioContext||window.webkitAudioContext)(); master=actx.createGain(); master.gain.value=S.vol; master.connect(actx.destination); }
+  if(actx.state==="suspended"){ $("unlock").hidden=false; actx.resume().then(()=>{$("unlock").hidden=true;}).catch(()=>{}); }
+  return actx;
+}
+document.addEventListener("pointerdown", ()=>{ audioCtx(); }, {capture:true});
+async function clipBuffer(i){
+  const L=S.D.levels.l1, key=`${S.version}:${i}`;
+  if(BUF.has(key)){ const b=BUF.get(key); BUF.delete(key); BUF.set(key,b); return b; }
+  const r=await fetch(`/clip?f=${L.file[i]}&t0=${L.t0[i]}&t1=${L.t1[i]}`);
+  const b=await audioCtx().decodeAudioData(await r.arrayBuffer());
+  BUF.set(key,b); if(BUF.size>300) BUF.delete(BUF.keys().next().value);
+  return b;
+}
+let audSeq=0; const AUD={last:-1, plays:0};
+async function audition(i, kind, step){
+  if(i<0) return;
+  S.hearing={i, kind, t:Date.now()}; hear();
+  // Live follows select / trace / step / follow; hover only with the "hover → Live" toggle (DESIGN §4, 2026-10-21)
+  if(kind!=="hover" || S.hoverLive) send({type:"nav", reading:RNAME(), idx:i, kind, step});
+  if(!S.aud || S.playOn) return;
+  const seq=++audSeq;
+  try{
+    const ctx=audioCtx(), b=await clipBuffer(i);
+    if(seq!==audSeq) return;                         // a newer hover won
+    const now=ctx.currentTime;
+    if(voice){ try{ voice.g.gain.cancelScheduledValues(now); voice.g.gain.setTargetAtTime(0,now,0.02); voice.s.stop(now+0.15);}catch(e){} }
+    const s=ctx.createBufferSource(), g=ctx.createGain(); s.buffer=b; s.connect(g); g.connect(master);
+    const d=b.duration; g.gain.setValueAtTime(0,now); g.gain.linearRampToValueAtTime(1,now+0.02);
+    g.gain.setValueAtTime(1,now+Math.max(0.03,d-0.08)); g.gain.linearRampToValueAtTime(0,now+d);
+    s.start(now); voice={s,g}; AUD.last=i; AUD.plays++;
+  }catch(e){ console.warn("audition", e); }
+}
+function hear(){
+  const h=$("hear");
+  if(!S.D){ h.textContent="…"; return; }
+  if(S.playOn){ const L=S.D.levels.l1, i=S.playOn.cur;
+    h.innerHTML=`▷ playing on <b>${trackName(S.playOn.f)}</b> ${fmtT($("player").currentTime)}${i>=0?` · <span class="dot" style="background:${clusterColor(R1().c[i],R1())}"></span> cluster ${R1().c[i]}`:""}`;
+    h.classList.remove("off"); return; }
+  const hh=S.hearing;
+  if(!hh || hh.i<0){ h.textContent = S.aud ? "silent · hover the map to listen" : "browser audition off"+(S.live.enabled?" · Live follows":""); h.classList.add("off"); return; }
+  const L=S.D.levels.l1, i=hh.i, r=R1(), c=r.c[i];
+  h.innerHTML=`${S.aud?"♪":"→ Live"} <b>${trackName(L.file[i])}</b> ${fmtT(L.t0[i])}–${fmtT(L.t1[i])} · <span class="dot" style="background:${clusterColor(c,r)}"></span> cluster ${c}${r.o[i]?" · <b style='color:var(--rubric)'>outlier</b>":""} <span style="color:var(--dim)">· ${hh.kind}</span>`;
+  h.classList.remove("off");
+}
+$("sd-aud").onclick=()=>{ S.aud=!S.aud; $("sd-aud").textContent=`audition: ${S.aud?"on":"off"}`; $("sd-aud").classList.toggle("on",S.aud); hear(); };
+$("sd-vol").oninput=e=>{ S.vol=+e.target.value; $("sd-vol-v").textContent=S.vol.toFixed(2); if(master) master.gain.value=S.vol; $("player").volume=S.vol; };
+/* play on: the track itself, streamed with Range requests; the map follows the clip under the playhead */
+const player=document.createElement("audio"); player.id="player"; player.preload="none"; document.body.appendChild(player);
+function playOn(){
+  if(S.playOn){ stopPlayOn(); return; }
+  const i = S.sel>=0 ? S.sel : (S.hearing && S.hearing.i>=0 ? S.hearing.i : -1);
+  if(i<0) return;
+  const L=S.D.levels.l1, f=L.file[i];
+  const tu=DMC_WEB.audio.trackUrl(f); if(!tu){ $("hear").textContent="play on: whole tracks are not part of the demo · load your own corpus to play on"; $("hear").classList.add("off"); return; }
+  if(voice){ try{ voice.s.stop(); }catch(e){} }
+  player.src=tu; player.volume=S.vol; player.currentTime=L.t0[i];
+  S.playOn={f, cur:i}; $("tp-play").classList.add("on"); $("tp-play").textContent="■ stop";
+  player.play().catch(e=>console.warn(e));
+}
+function stopPlayOn(){ player.pause(); S.playOn=null; $("tp-play").classList.remove("on"); $("tp-play").textContent="▷ play on"; hear(); }
+player.addEventListener("timeupdate", ()=>{
+  if(!S.playOn) return;
+  const L=S.D.levels.l1, ids=L.byTrack[S.playOn.f], t=player.currentTime;
+  let best=-1; for(const i of ids){ if(L.t0[i]<=t) best=i; else break; }
+  if(best>=0 && best!==S.playOn.cur){ S.playOn.cur=best; S.sel=best; NB=new Set(neighbours(best));
+    gDots.selectAll("circle").attr("opacity",j=>opacity(j)); ring(); showInfo(); strip();
+    send({type:"nav", reading:RNAME(), idx:best, kind:"follow"}); }
+  hear();
+});
+player.addEventListener("ended", stopPlayOn);
+$("tp-play").onclick=playOn;
+function step(d){
+  if(!S.D) return; const L=S.D.levels.l1;
+  const i = S.sel>=0 ? S.sel : (S.hearing ? S.hearing.i : -1); if(i<0) return;
+  const ids=L.byTrack[L.file[i]], k=ids.indexOf(i), j=ids[Math.max(0,Math.min(ids.length-1,k+d))];
+  if(j!=null) select(j,"step",ids.indexOf(j));
+}
+$("tp-prev").onclick=()=>step(-1); $("tp-next").onclick=()=>step(1);
+
+/* ================================================================ strip: the track's timeline */
+function strip(){
+  const el=d3.select("#strip-svg"); el.selectAll("*").remove();
+  if(!S.D) return;
+  const L=S.D.levels.l1, i = S.sel>=0 ? S.sel : (S.hearing && S.hearing.i>=0 ? S.hearing.i : -1);
+  if(i<0){ $("strip-label").textContent="—"; return; }
+  const f=L.file[i], ids=L.byTrack[f], dur=S.D.tracks[f].duration, w=el.node().getBoundingClientRect().width||600, r=R1();
+  const x=d3.scaleLinear().domain([0,dur]).range([0,w]);
+  el.append("g").selectAll("rect").data(ids).join("rect")
+    .attr("x",j=>x(L.t0[j])).attr("width",j=>Math.max(1,x(L.t1[j])-x(L.t0[j]))*0.55).attr("y",8).attr("height",14)
+    .attr("fill",j=>clusterColor(r.c[j],r)).attr("opacity",j=>inPlay(j)?0.9:0.2);
+  el.append("rect").attr("x",x(L.t0[i])-1).attr("width",3).attr("y",3).attr("height",24).attr("fill","var(--dm-ring)");
+  el.on("click", ev=>{ const t=x.invert(d3.pointer(ev)[0]); const j=d3.least(ids, k=>Math.abs(L.t0[k]-t)); if(j!=null){ if(S.playOn) player.currentTime=L.t0[j]; select(j,"strip"); } });
+  $("strip-label").textContent=`${trackName(f)} · ${fmtT(L.t0[i])} / ${fmtT(dur)}`;
+}
+
+/* ================================================================ information */
+const FEATS=[["spectral.centroid","centroid","Hz",0],["energy.rms_db","level","dB",1],["spectral.flatness","flatness","",4],["rhythm.onset_rate","onsets","/s",2],
+             ["rhythm.beat_strength","pulse","",3],["energy.dynamic_range","dyn. range","dB",1]];
+function showInfo(){
+  const el=$("info-sel");
+  if(!S.D){ el.textContent="…"; return; }
+  if(S.level==="l0"){ el.innerHTML=`<b>tracks · L0</b> · ${S.D.tracks.length} tracks of ${S.D.corpus_name}<br>hover a track to hear its medoid clip · click to enter it`; return; }
+  const i=S.sel; if(i<0){ el.innerHTML="hover the map to listen · click a point to select it · ← → step in time"; return; }
+  const L=S.D.levels.l1, r=R1(), c=r.c[i];
+  let h=`<b>${trackLong(L.file[i])}</b><br>${fmtT(L.t0[i])}–${fmtT(L.t1[i])} · <span class="dot" style="background:${clusterColor(c,r)}"></span> cluster ${c}${r.noise_class===c?" (noise)":""}`;
+  h+= r.o[i] ? ` · <b style="color:var(--rubric)">outlier</b> ${r.os[i].toFixed(2)}` : ` · outlier score ${r.os[i].toFixed(2)}`;
+  h+=`<table>`; for(const [k,lab,u,nd] of FEATS){ const v=keyValues(k,"l1"); if(v) h+=`<tr><td>${lab}</td><td class="v">${(+v[i]).toFixed(nd)} ${u}</td></tr>`; }
+  for(const k of ["section.index","part.position","tier.loudness","tonal.key","label.side"]){ const v=keyValues(k,"l1"), m=keyMeta(k); if(v&&m) h+=`<tr><td>${k}</td><td class="v">${m.labels?m.labels[v[i]]??v[i]:v[i]}</td></tr>`; }
+  const mk=(S.markers||{})[L.clip_id[i]]; if(mk) h+=`<tr><td>marker</td><td class="v">◆ ${mk.name}</td></tr>`;
+  h+=`<tr><td>density</td><td class="v">${r.d[i].toFixed(2)}</td></tr></table>`;
+  h+=`<div class="seglabel" style="margin:8px 0 3px">10 NEIGHBOURS · feature space</div>`;
+  for(const j of neighbours(i)) h+=`<div class="nb" data-i="${j}"><span class="dot" style="background:${clusterColor(r.c[j],r)}"></span>${trackName(L.file[j])} ${fmtT(L.t0[j])}${L.file[j]===L.file[i]?"":" ↗"}</div>`;
+  el.innerHTML=h;
+  el.querySelectorAll(".nb").forEach(n=>{ n.onclick=()=>select(+n.dataset.i); n.onmouseenter=()=>audition(+n.dataset.i,"hover"); });
+}
+
+/* ================================================================ view / lens */
+function buildViewReadings(){
+  const el=$("view-readings"); el.innerHTML="";
+  S.D.readings.forEach((n,k)=>{ const b=document.createElement("button"); b.className="wbtn lay"+(k===S.ri?" on":"");
+    b.textContent=`${k+1} · ${n}`; b.style.width="100%"; b.onclick=()=>setReading(k); el.appendChild(b); });
+  const r=R1(), sp=r.spec||{};
+  $("view-reading-note").textContent = `${(sp.dr||{}).method||"?"} · ${(sp.cluster||{}).method||"?"} in ${(sp.cluster||{}).space||"feature"} space · ${r.n_clusters} clusters${r.noise_class!=null?" + noise":""} · features: ${Object.keys(r.features||{}).join(", ")}`;
+}
+function buildColorSelect(){
+  const s=$("v-color"), base=[["cluster","cluster (this reading)"],["track","track"],["outlier_score","outlier score"],["density","density on the map"]];
+  const K=S.D.keys||{live:[],readings:{}}, keys=[...K.live, ...(K.readings[RNAME()]||[])].filter(k=>S.level==="l1" || (k.family==="S2"));
+  Object.keys(S.probes||{}).forEach(n=>keys.push(keyMeta(n)));
+  const byFam={}; keys.forEach(k=>{ (byFam[k.family]??=[]).push(k); });
+  const famOrder=(CAT||[]).map(f=>f.code);
+  let h=base.map(([v,l])=>`<option value="${v}"${v===S.colorBy?" selected":""}>${l}</option>`).join("");
+  for(const f of Object.keys(byFam).sort((a,b)=>famOrder.indexOf(a)-famOrder.indexOf(b)))
+    h+=`<optgroup label="${f} · ${(CATBY[f]||{}).name||""}">`+byFam[f].map(k=>`<option value="${k.name}"${k.name===S.colorBy?" selected":""}>${k.name}</option>`).join("")+`</optgroup>`;
+  s.innerHTML=h;
+  if(![...s.options].some(o=>o.value===S.colorBy)){ S.colorBy="cluster"; s.value="cluster"; }
+  s.onchange=()=>{ S.colorBy=s.value; render(false,true); buildLegend(); };
+}
+function colorInfo(){
+  const el=$("color-info"); if(!S.D) return;
+  if(S.colorBy==="cluster") el.textContent=`${R().n_clusters} clusters of ${RNAME()}${R().noise_class!=null?" · grey = HDBSCAN noise":""} · size = loudness (rms)`;
+  else if(S.colorBy==="track") el.textContent="one colour per track · size = loudness (rms)";
+  else { const cs=colorScale(), m=keyMeta(S.colorBy);
+    el.textContent = cs.sym ? `${S.colorBy}: ${m.n_classes} classes${m.labels?" ("+m.labels.slice(0,6).join(", ")+(m.labels.length>6?"…":"")+")":""} · ${m.desc||""}`
+      : `${S.colorBy}: ${(+cs.lo).toPrecision(3)} → ${(+cs.hi).toPrecision(3)} (2–98 %)${m&&m.desc?" · "+m.desc:""} · size = loudness`; }
+}
+function buildLens(){
+  const tr=$("ln-tracks"); tr.innerHTML="";
+  S.D.tracks.forEach((t,f)=>{ const c=document.createElement("span"); c.className="qchip"+(S.fTrack.has(f)?" active":""); c.textContent=trackName(f);
+    c.onclick=()=>{ S.fTrack.has(f)?S.fTrack.delete(f):S.fTrack.add(f); buildLens(); render(false,true); strip(); }; tr.appendChild(c); });
+  const cl=$("ln-clusters"); cl.innerHTML=""; const r=R();
+  const n=r.n_clusters + (r.noise_class!=null?1:0);
+  for(let c=0;c<n;c++){ const e=document.createElement("span"); e.className="qchip"+(S.fCluster.has(c)?" active":"");
+    e.innerHTML=`<span class="dot" style="background:${clusterColor(c,r)}"></span>${c}${c===r.noise_class?" noise":""}`;
+    e.onclick=()=>{ S.fCluster.has(c)?S.fCluster.delete(c):S.fCluster.add(c); buildLens(); render(false,true); strip(); }; cl.appendChild(e); }
+}
+$("ln-clear").onclick=()=>{ S.fTrack.clear(); S.fCluster.clear(); buildLens(); render(false,true); strip(); };
+$("ln-dim").onclick=()=>{ S.dim=!S.dim; $("ln-dim").textContent=`neighbourhood dimming: ${S.dim?"on":"off"}`; gDots.selectAll("circle").attr("opacity",j=>opacity(j)); };
+$("ln-out").onclick=()=>{ S.showOut=!S.showOut; $("ln-out").textContent=`outliers: ${S.showOut?"ringed":"hidden"}`; outliers(); buildLegend(); };
+
+/* ================================================================ legend */
+function clusterStats(){
+  const L=LV(), r=R(), n=r.n_clusters+(r.noise_class!=null?1:0), out=[];
+  for(let c=0;c<n;c++){
+    const ids=d3.range(L.n).filter(i=>r.c[i]===c); if(!ids.length) continue;
+    const mx=d3.mean(ids,i=>r.x[i]), my=d3.mean(ids,i=>r.y[i]);
+    ids.sort((a,b)=>((r.x[a]-mx)**2+(r.y[a]-my)**2)-((r.x[b]-mx)**2+(r.y[b]-my)**2));
+    const cnt=d3.rollups(ids,v=>v.length,i=>L.file[i]).sort((a,b)=>b[1]-a[1]);
+    out.push({c, ids, cnt, n:ids.length});
+  }
+  return out;
+}
+const LGPOS={};
+function buildLegend(){
+  if(!S.D) return;
+  const r=R(), sp=(R1().spec||{});
+  $("lg-terse").textContent=`${RNAME()} · ${(sp.dr||{}).method} map · ${(sp.cluster||{}).method} clusters in ${(sp.cluster||{}).space} space · ${S.level==="l1"?S.D.levels.l1.n+" clips":S.D.tracks.length+" tracks"} of ${S.D.corpus_name}`;
+  $("lg-clusters-h").textContent=`CLUSTERS · ${r.n_clusters}${r.noise_class!=null?" + noise":""} · ${S.level==="l1"?"clips":"tracks"}`;
+  const el=$("lg-clusters"); el.innerHTML="";
+  for(const s of clusterStats()){
+    const row=document.createElement("div"); row.className="lg-row";
+    const top=s.cnt.slice(0,3).map(([f,k])=>`${trackName(f)} ${Math.round(100*k/s.n)}%`).join(" · ");
+    row.innerHTML=`<span class="lgdot" style="background:${clusterColor(s.c,r)}"></span><span class="lgn">${s.c===r.noise_class?"noise":"cluster "+s.c} <span style="color:var(--dim);font-size:10px">${s.n}</span></span><span class="lgs" title="${top}">${top}</span><span class="lgchip" data-d="-1">◀</span><span class="lgchip" data-d="1">▶</span>`;
+    const go=d=>{ if(S.level!=="l1"){ return; } LGPOS[s.c]=((LGPOS[s.c]??-1)+d+s.n)%s.n; const i=s.ids[LGPOS[s.c]]; select(i,"legend"); };
+    row.onclick=e=>{ if(e.target.classList.contains("lgchip")) return;
+      if(S.level==="l0"){ const m=trackMedoid(LV().file[s.ids[0]]); if(m>=0) audition(m,"legend"); return; }
+      LGPOS[s.c]=0; select(s.ids[0],"legend"); };
+    row.querySelectorAll(".lgchip").forEach(ch=>ch.onclick=e=>{ e.stopPropagation(); go(+ch.dataset.d); });
+    el.appendChild(row);
+  }
+  const see=$("lg-see"), dot=c=>`<svg width="22" height="14"><circle cx="11" cy="7" r="5" fill="${c}"/></svg>`;
+  see.innerHTML=[
+    [dot(PAL[0]), `position — ${RNAME()}'s ${(sp.dr||{}).method} map (close = similar under this reading's features)`],
+    [dot(PAL[3]), `colour — ${S.colorBy==="cluster"?"cluster":S.colorBy}${r.noise_class!=null && S.colorBy==="cluster"?" (grey = noise)":""}`],
+    [`<svg width="22" height="14"><circle cx="5" cy="7" r="2" fill="var(--dim)"/><circle cx="15" cy="7" r="5" fill="var(--dim)"/></svg>`, "size — loudness (rms) of the clip"],
+    [`<svg width="22" height="14"><circle cx="11" cy="7" r="5" fill="none" stroke="var(--dm-ring)" stroke-width="1.6"/></svg>`, "white ring + lines — the selected clip and its 10 nearest neighbours (feature space)"],
+    [`<svg width="22" height="14"><circle cx="11" cy="7" r="5" fill="none" stroke="var(--gold)" stroke-width="1.2"/></svg>`, "gold ring — what you hear now"],
+    [`<svg width="22" height="14"><circle cx="11" cy="7" r="5" fill="none" stroke="var(--rubric)" stroke-width="1.2"/></svg>`, `red ring — outlier (${(sp.anomaly||{}).method||"iforest"}), when lens · outliers is on`],
+    [`<svg width="22" height="14"><circle cx="11" cy="7" r="4" fill="var(--dim)" opacity=".2"/></svg>`, "faded — outside the neighbourhood, or filtered out"],
+    [`<svg width="22" height="14"><path d="M2 10 L8 4 L14 9 L20 3" stroke="var(--gold)" fill="none"/></svg>`, "gold path — the trace"],
+  ].map(([a,b])=>`${a}<span>${b}</span>`).join("");
+  // the comparison table
+  const cmp=S.D.comparison.l1; if(!cmp){ $("lg-cmp").innerHTML=""; return; }
+  const cols=[["n_clusters","k"],["trustworthiness","trust"],["knn_purity_far_track","kNN track"],["knn_purity_far_album","kNN album"],["ari_track","ARI track"],["cluster_purity_album","purity album"]]
+    .filter(([k])=>Object.values(cmp.readings)[0] && k in Object.values(cmp.readings)[0]);
+  const best={}; for(const [k] of cols){ best[k]=d3.max(Object.values(cmp.readings),v=>v[k]); }
+  let h=`<table class="cmp"><tr><th>reading</th>${cols.map(([,l])=>`<th>${l}</th>`).join("")}</tr>`;
+  for(const [n,v] of Object.entries(cmp.readings))
+    h+=`<tr class="${n===RNAME()?"on":""}"><td>${S.D.readings.indexOf(n)+1} · ${n}</td>${cols.map(([k])=>`<td class="${k!=="n_clusters"&&v[k]===best[k]?"best":""}">${v[k]==null?"–":v[k]}</td>`).join("")}</tr>`;
+  $("lg-cmp").innerHTML=h+"</table>";
+  const r0=Object.values(cmp.readings)[0]||{};
+  $("lg-cmp-note").textContent=`kNN = share of a clip's 10 neighbours from the same track / album, same-track clips within 4 s excluded (chance: track ${r0.knn_chance_track??"–"}, album ${r0.knn_chance_album??"–"}) · trust = trustworthiness of the 2-D map · ARI = clusters vs tracks · purity = how album-pure the clusters are · bold = best`;
+}
+let LGPAGE="clusters";
+document.querySelectorAll("[data-lg]").forEach(c=>c.onclick=()=>{ LGPAGE=c.dataset.lg;
+  document.querySelectorAll("[data-lg]").forEach(x=>x.classList.toggle("active",x.dataset.lg===LGPAGE));
+  $("lg-keys").hidden = LGPAGE!=="keys"; $("lg-main").hidden = LGPAGE==="keys"; if(LGPAGE==="keys") buildKeysPage(); });
+const KPOS={};
+function currentTrack(){ const L=S.D.levels.l1, i=S.sel>=0?S.sel:(S.hearing&&S.hearing.i>=0?S.hearing.i:-1); return i>=0?L.file[i]:0; }
+function sparkline(vals, ids, sym){
+  const w=120,h=18, v=ids.map(i=>vals[i]), lo=d3.min(v), hi=d3.max(v), x=d3.scaleLinear().domain([0,Math.max(1,v.length-1)]).range([1,w-1]),
+        y=d3.scaleLinear().domain([lo,hi===lo?lo+1:hi]).range([h-2,2]);
+  const line=(sym?d3.line().curve(d3.curveStepAfter):d3.line())(v.map((d,k)=>[x(k),y(d)]));
+  const L=S.D.levels.l1, cur=S.sel>=0?ids.indexOf(S.sel):-1;
+  return `<svg width="${w}" height="${h}"><path d="${line}" fill="none" stroke="var(--dim)" stroke-width="1"/>${cur>=0?`<circle cx="${x(cur)}" cy="${y(v[cur])}" r="2.2" fill="var(--gold)"/>`:""}</svg>`;
+}
+function buildKeysPage(){
+  if(!S.D) return;
+  const el=$("lg-keys"), K=S.D.keys||{live:[],readings:{},warnings:[]};
+  const keys=[...K.live, ...(K.readings[RNAME()]||[])];
+  Object.keys(S.probes||{}).forEach(n=>keys.push(keyMeta(n)));
+  const f=currentTrack(), ids=S.D.levels.l1.byTrack[f];
+  const famOrder=(CAT||[]).map(x=>x.code);
+  keys.sort((a,b)=>famOrder.indexOf(a.family)-famOrder.indexOf(b.family));
+  let h=`<div class="lg-h">KEYS · ${keys.length} · _live + ${RNAME()} · sparkline = ${trackName(f)}</div>`;
+  for(const w of (K.warnings||[])) h+=`<div class="kwarn">⚠ ${w}</div>`;
+  let lastFam=null;
+  for(const k of keys){
+    if(k.family!==lastFam){ lastFam=k.family; h+=`<div class="tx-note" style="margin:8px 0 2px;color:var(--ink)">${k.family} · ${(CATBY[k.family]||{}).name||""}</div>`; }
+    const vals=keyValues(k.name,"l1"); if(!vals) continue;
+    h+=`<div class="krow" data-k="${k.name}"><span class="kfam">${k.family}</span><span class="kn" title="colour the map by ${k.name}">${k.name}</span>${sparkline(vals,ids,k.kind==="symbol")}<span class="lgchip" data-d="up" title="hear the clip where it is highest (again: the next)">▲</span><span class="lgchip" data-d="down" title="lowest (again: the next)">▼</span><span class="kd">${k.desc||""}</span></div>`;
+  }
+  el.innerHTML=h;
+  el.querySelectorAll(".krow").forEach(row=>{
+    const name=row.dataset.k;
+    row.querySelector(".kn").onclick=()=>{ S.colorBy=name; buildColorSelect(); render(false,true); };
+    row.querySelectorAll(".lgchip").forEach(ch=>ch.onclick=()=>{
+      const vals=keyValues(name,"l1"), d=ch.dataset.d, pos=(KPOS[name]??={up:-1,down:-1});
+      const order=(KPOS[name].order??=d3.range(vals.length).sort((a,b)=>vals[b]-vals[a]));
+      pos[d]=(pos[d]+1)%order.length; const i= d==="up" ? order[pos[d]] : order[order.length-1-pos[d]];
+      select(i,"legend"); buildKeysPage(); });
+  });
+}
+function toggleDock(name){
+  const b=document.body.classList, other=name==="legend"?"config":"legend";
+  b.remove(other); b.toggle(name);
+  if(name==="legend" && b.contains("legend")){ buildLegend(); if(LGPAGE==="keys") buildKeysPage(); }
+  if(name==="config" && b.contains("config")) { buildForm(); loadCorpora(); loadPresets(); }
+  render(false,true); strip();
+}
+function toggleSide(){ const open=$("side").classList.toggle("open"); document.body.classList.toggle("side-open",open); render(false,true); strip(); }
+function showTab(name){
+  document.querySelectorAll(".stab").forEach(b=>b.classList.toggle("on",b.dataset.tab===name));
+  document.querySelectorAll(".tsec").forEach(x=>x.classList.toggle("on",x.dataset.tab===name));
+}
+document.querySelectorAll(".stab").forEach(b=>b.addEventListener("click",()=>showTab(b.dataset.tab)));
+showTab("view");
+
+/* ================================================================ sound · Live */
+function liveState(){
+  const L=S.live, el=$("live-state");
+  $("sd-live").textContent=`Ableton: link ${L.enabled?"on":"off"}`; $("sd-live").classList.toggle("on",!!L.enabled);
+  if(!S.connected){ el.innerHTML='<span class="bad">no bridge</span> · start viz/bridge.py'; return; }
+  const why = {"no Hub":"no DMC Hub answering: is Live open with the Hub on Master and its web link on?","busy":"the Hub is linked to another page or tab","refused (origin)":"the Hub refused this page","connecting":"connecting…"}[L.web]||"";
+  el.innerHTML = !L.enabled ? `off · links to the DMC Hub at <b>${L.host}:${L.port}</b>`
+    : `${L.connected?'<span class="ok">Live linked</span>':'<span class="bad">'+(why||'no reply from the Hub yet')+'</span>'} · <b>${L.host}:${L.port}</b><br>`+
+      `<b>${L.msgs_per_s}</b> msg/s · reading <b>${L.reading||"–"}</b>${L.since_ack_s!=null?` · ack ${L.since_ack_s}s ago`:""}`;
+  if(document.activeElement!==$("sd-host")) $("sd-host").value=L.host;
+  if(document.activeElement!==$("sd-port")) $("sd-port").value=L.port;
+}
+$("sd-live").onclick=()=>send({type:"live", enabled:!S.live.enabled});
+$("sd-hover").onclick=()=>{ S.hoverLive=!S.hoverLive; $("sd-hover").textContent=`hover → Live: ${S.hoverLive?"on":"off"}`; $("sd-hover").classList.toggle("on",S.hoverLive); };
+$("sd-hostset").onclick=()=>send({type:"live", host:$("sd-host").value.trim(), port:+$("sd-port").value});
+$("sd-rate").oninput=e=>{ $("sd-rate-v").textContent=e.target.value+"/s"; };
+$("sd-rate").onchange=e=>send({type:"live", rate:+e.target.value});
+
+/* ================================================================ trace */
+function traceAdd(i){ if(S.trace[S.trace.length-1]!==i){ S.trace.push(i); traceDraw(); } }
+function traceDraw(){
+  $("tr-len").textContent=`${S.trace.length} clips`;
+  const pts = S.level==="l1" ? S.trace.map(i=>XY[i]) : [];
+  const p=gTrace.selectAll("path").data(pts.length>1?[pts]:[]); p.exit().remove();
+  p.enter().append("path").attr("fill","none").attr("stroke","var(--gold)").attr("stroke-width",1.4).attr("stroke-opacity",.8)
+   .merge(p).attr("d",d3.line());
+}
+$("tr-rec").onclick=()=>{ S.rec=!S.rec; $("tr-rec").textContent=`● record: ${S.rec?"on":"off"}`; $("tr-rec").classList.toggle("on",S.rec); };
+$("tr-draw").onclick=()=>toggleDraw();
+function toggleDraw(){ S.draw=!S.draw; $("tr-draw").textContent=`◫ draw: ${S.draw?"on":"off"}`; $("tr-draw").classList.toggle("on",S.draw); document.body.classList.toggle("brushing",S.draw); }
+$("tr-clear").onclick=()=>{ S.trace=[]; traceDraw(); };
+$("tr-rate").oninput=e=>$("tr-rate-v").textContent=e.target.value+"/s";
+svg.call(d3.drag().filter(ev=>S.draw && !ev.button)
+  .on("start", ev=>{ S.brushPts=[]; S.trace=[]; })
+  .on("drag", ev=>{
+    const t=d3.zoomTransform(svg.node()), p=t.invert([ev.x,ev.y]), prev=S.brushPts[S.brushPts.length-1]||p;
+    S.brushPts.push(p);
+    gBrush.selectAll("path").data([S.brushPts]).join("path").attr("fill","none").attr("stroke","var(--gold)").attr("stroke-dasharray","3 3").attr("d",d3.line());
+    if(S.level!=="l1") return;
+    // sample the stroke every 5 screen px, so a fast stroke (few events) still picks up every clip it crosses
+    const n=Math.max(1, Math.ceil(Math.hypot(p[0]-prev[0],p[1]-prev[1])*t.k/5));
+    let last=-1;
+    for(let s=1;s<=n;s++){ const q=[prev[0]+(p[0]-prev[0])*s/n, prev[1]+(p[1]-prev[1])*s/n];
+      const j=delaunay.find(q[0],q[1]); if(j<0) continue; const i=playIdx[j];
+      if(Math.hypot(XY[i][0]-q[0],XY[i][1]-q[1])*t.k<14){ traceAdd(i); last=i; } }
+    if(last>=0) audition(last,"trace"); })
+  .on("end", ()=>{ gBrush.selectAll("*").remove(); traceDraw(); }));
+$("tr-play").onclick=()=>{
+  if(S.playing){ clearInterval(S.playing); S.playing=null; $("tr-play").textContent="▷ play"; return; }
+  if(!S.trace.length) return; let k=0;
+  $("tr-play").textContent="■ stop";
+  const tick=()=>{ if(k>=S.trace.length){ clearInterval(S.playing); S.playing=null; $("tr-play").textContent="▷ play"; return; } select(S.trace[k],"trace",k); k++; };
+  tick(); S.playing=setInterval(tick, 1000/+$("tr-rate").value);
+};
+$("tr-save").onclick=async()=>{
+  if(!S.trace.length) return; const L=S.D.levels.l1;
+  const name=$("tr-name").value.trim()||undefined;
+  const data={reading:RNAME(), corpus:S.D.corpus, created:new Date().toISOString(), clip_ids:S.trace.map(i=>L.clip_id[i])};
+  await fetch("/api/traces",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,data})});
+  loadTraces();
+};
+async function loadTraces(){
+  let names=[]; try{ names=await (await fetch("/api/traces")).json(); }catch(e){}
+  const el=$("tr-list"); el.innerHTML="";
+  for(const n of names){ const row=document.createElement("div"); row.className="tr-row"; row.innerHTML=`<span class="nm" title="load">${n}</span>`;
+    row.querySelector(".nm").onclick=async()=>{ const t=await (await fetch("/api/traces/"+encodeURIComponent(n))).json(); const L=S.D.levels.l1;
+      S.trace=t.clip_ids.map(c=>L.clipIdx.get(c)).filter(i=>i!=null); traceDraw(); };
+    el.appendChild(row); }
+}
+
+/* ================================================================ config dock */
+const GROUPS=["spectral","energy","mfcc","chroma","rhythm","clap"];
+const isDirty=()=> S.form && S.applied && JSON.stringify(S.form)!==JSON.stringify(S.applied);
+function markDirty(){
+  const d=isDirty(); $("config-tab").classList.toggle("dirty",d);
+  $("cf-apply").disabled=!d || S.busy; $("cf-apply").classList.toggle("edited",d);
+  if(!S.busy) cfStatusIdle();
+}
+function cfStatusIdle(){
+  if(S.busy) return;
+  $("cf-status").classList.remove("err");
+  $("cf-status").textContent = isDirty() ? "edited · apply to recompute (unchanged stages come from the cache)"
+    : `in view: ${S.D?S.D.label:"…"} · ${S.D?S.D.levels.l1.n:0} clips · ${S.D?S.D.readings.length:0} readings`;
+}
+function getP(o,path){ return path.split(".").reduce((a,k)=>a==null?a:a[k], o); }
+function setP(o,path,v){ const ks=path.split("."), last=ks.pop(); const t=ks.reduce((a,k)=>(a[k]??=(/^\d+$/.test(k)?[]:{})), o); t[last]=v; }
+function knob(label, path, kind, opts, title){
+  const v=getP(S.form,path); const t=title?` title="${title}"`:"";
+  if(kind==="select") return `<div class="tx-knob"${t}><span>${label}</span><select data-p="${path}">${opts.map(o=>`<option${String(o)===String(v)?" selected":""}>${o}</option>`).join("")}</select></div>`;
+  if(kind==="bool") return `<div class="tx-knob"${t}><span>${label}</span><input type="checkbox" data-p="${path}" data-k="bool"${v?" checked":""}></div>`;
+  if(kind==="num") return `<div class="tx-knob"${t}><span>${label}</span><input type="number" step="any" data-p="${path}" data-k="num" value="${v??""}" placeholder="${opts||""}"></div>`;
+  return `<div class="tx-knob"${t}><span>${label}</span><input data-p="${path}" value="${v??""}" spellcheck="false"></div>`;
+}
+let CORPORA=[];
+async function loadCorpora(){ try{ CORPORA=await (await fetch("/api/corpora")).json(); }catch(e){ CORPORA=[]; } buildForm(); }
+function buildForm(){
+  if(!S.form) return;
+  const F=S.form, p2=F.phase2, seg=p2.segmentation, mode=seg.mode;
+  const cur=CORPORA.find(c=>c.path===F.corpus);
+  let h=`<div class="lg-h">CORPUS · data/corpora/</div>`;
+  h+=`<div class="tx-knob"><span>folder</span><select data-p="corpus">${(CORPORA.length?CORPORA:[{path:F.corpus,name:F.corpus}]).map(c=>`<option value="${c.path}"${c.path===F.corpus?" selected":""}>${c.name}</option>`).join("")}</select></div>`;
+  h+=`<div class="tx-note">${cur?`${cur.files} files · ${fmtT(cur.duration_s).replace(/^(\d+):/,(m,a)=>`${Math.floor(a/60)}h ${a%60}m `)} total`:"…"}</div>`;
+  h+=`<div class="lg-h">AUDIO · SEGMENTATION</div>`;
+  h+=knob("analysis rate","phase2.audio.sr","select",[22050,44100,48000]);
+  h+=knob("normalize","phase2.audio.normalize","select",["none","peak","rms"],"none keeps relative loudness between files");
+  h+=knob("mode","phase2.segmentation.mode","select",["whole","fixed","onset","beats"]);
+  if(mode==="fixed") h+=knob("window · s","phase2.segmentation.fixed.size_s","num")+knob("overlap · 0–0.9","phase2.segmentation.fixed.overlap","num")+knob("min tail · s","phase2.segmentation.fixed.min_tail_s","num");
+  if(mode==="onset") h+=knob("min length · s","phase2.segmentation.onset.min_len_s","num")+knob("max length · s","phase2.segmentation.onset.max_len_s","num")+knob("onset delta","phase2.segmentation.onset.delta","num","0.07");
+  if(mode==="beats") h+=knob("beats per clip","phase2.segmentation.beats.n_beats","num")+knob("min length · s","phase2.segmentation.beats.min_len_s","num")+knob("max length · s","phase2.segmentation.beats.max_len_s","num");
+  h+=knob("snap to zero crossings","phase2.segmentation.snap.enabled","bool")+knob("snap radius · ms","phase2.segmentation.snap.radius_ms","num");
+  h+=`<div class="lg-h">FEATURE GROUPS · Phase 2</div>`;
+  h+=`<div class="grp">${GROUPS.map(g=>`<label><input type="checkbox" data-p="phase2.features.${g}.enabled" data-k="bool"${p2.features[g].enabled?" checked":""}>${g}</label>`).join("")}</div>`;
+  h+=knob("MFCC coefficients","phase2.features.mfcc.n_mfcc","num")+knob("chroma variant","phase2.features.chroma.variant","select",["stft","cqt","cens"]);
+  h+=knob("collapse contrast bands","phase2.features.spectral.collapse_contrast","bool")+knob("tempogram window · s","phase2.features.rhythm.tempogram_win_s","num");
+  h+=knob("CLAP model","phase2.features.clap.model","select",["laion/larger_clap_music","laion/clap-htsat-fused"])+knob("CLAP device","phase2.features.clap.device","select",["auto","mps","cpu"]);
+  h+=`<div class="tx-note">a group's features are cached per file and per its own settings: changing one group recomputes only that group</div>`;
+  h+=knob("workers","phase2.workers","num","-1","-1 = all cores − 1");
+  h+=keysForm();
+  h+=`<div class="lg-h">READINGS · keys 1–6</div>`;
+  (F.readings.readings||[]).forEach((r,k)=>{ h+=readingForm(r,k); });
+  if((F.readings.readings||[]).length<6) h+=`<button class="wbtn" id="cf-addr" style="width:100%">+ add a reading</button>`;
+  const el=$("cf-form"), open=[...el.querySelectorAll("details[open]")].map(d=>d.dataset.k);
+  el.innerHTML=h;
+  el.querySelectorAll("details").forEach(d=>{ if(open.includes(d.dataset.k)) d.open=true; });
+  el.querySelectorAll("[data-p]").forEach(inp=>{
+    inp.addEventListener("change", ()=>{
+      let v = inp.dataset.k==="bool" ? inp.checked : inp.value;
+      if(inp.dataset.k==="num") v = inp.value==="" ? null : +inp.value;
+      else if(inp.tagName==="SELECT" && /^\d+$/.test(v)) v=+v;
+      if(inp.dataset.k==="kauto") { setP(S.form, inp.dataset.p, inp.checked ? "auto" : (getP(S.applied,inp.dataset.p)==="auto"? 6 : getP(S.applied,inp.dataset.p))); }
+      else if(inp.dataset.k==="list") setP(S.form, inp.dataset.p, inp.value.split(",").map(s=>s.trim()).filter(Boolean));
+      else if(inp.dataset.k==="lines") setP(S.form, inp.dataset.p, inp.value.split("\n").map(s=>s.trim()).filter(Boolean));
+      else if(inp.dataset.k==="dict") setP(S.form, inp.dataset.p, Object.fromEntries(inp.value.split("\n").map(l=>l.split("=").map(x=>x.trim())).filter(a=>a.length===2&&a[0])));
+      else if(inp.dataset.k==="pairs") setP(S.form, inp.dataset.p, inp.value.split("\n").map(l=>l.split(",").map(x=>x.trim()).filter(Boolean)).filter(a=>a.length===2));
+      else if(inp.dataset.k==="multi") { const opts=JSON.parse(inp.dataset.opts), cur=new Set(getP(S.form,inp.dataset.p)||[]); inp.checked?cur.add(inp.value):cur.delete(inp.value); setP(S.form, inp.dataset.p, opts.filter(o=>cur.has(o))); }
+      else if(inp.dataset.k==="grp") { const arr=new Set(getP(S.form,inp.dataset.p)||[]); inp.checked?arr.add(inp.value):arr.delete(inp.value); setP(S.form,inp.dataset.p,GROUPS.concat(["mean","std","min","max"]).filter(g=>arr.has(g))); }
+      else setP(S.form, inp.dataset.p, v);
+      markDirty(); if(inp.dataset.rebuild!==undefined || inp.dataset.p.endsWith(".mode") || inp.dataset.p.endsWith(".method") || inp.dataset.k==="kauto" || inp.dataset.p==="corpus") buildForm();
+    });
+  });
+  el.querySelectorAll(".rd .x").forEach(x=>x.onclick=e=>{ e.preventDefault(); S.form.readings.readings.splice(+x.dataset.k,1); markDirty(); buildForm(); });
+  const add=$("cf-addr"); if(add) add.onclick=()=>{ S.form.readings.readings.push({name:`reading_${S.form.readings.readings.length+1}`, features:{groups:["spectral","energy"]}, dr:{method:"pca"}, cluster:{method:"kmeans", k:"auto"}}); markDirty(); buildForm(); };
+}
+/* KEYS · add more: the catalogue's families (dmc/keys.py CATALOGUE via /api/keys_catalogue), Signal / Symbol / Event */
+function keysForm(){
+  if(!CAT) return "";
+  const kc=S.form.readings.keys||{};
+  let h=`<div class="lg-h">KEYS · add more · the catalogue (lab/SIGNAL_SYMBOL_CATALOGUE.md)</div><div class="tx-note">tick a family to compute its keys; core families are always on; skipped ones say why · every key goes to Live with its family code and a one-line description</div>`;
+  for(const [grp,title] of [["signal","SIGNAL · S1–S18 · where, continuous"],["symbol","SYMBOL · Y1–Y14 · what, categorical"],["event","EVENT · E1–E8 · discrete triggers"]]){
+    h+=`<div class="tx-note" style="color:var(--ink);letter-spacing:.12em;margin-top:10px">${title}</div>`;
+    for(const f of CAT.filter(x=>x.group===grp)){
+      const c=kc[f.code]||{}, core=f.scope==="core", skip=f.scope==="skipped", en=core || (!skip && !!c.enabled);
+      const P=`readings.keys.${f.code}`;
+      h+=`<details class="rd famrow" data-k="fam_${f.code}"><summary><input type="checkbox" data-p="${P}.enabled" data-k="bool"${en?" checked":""}${core||skip?" disabled":""} onclick="event.stopPropagation()"><span class="code">${f.code}</span>${f.name}<span class="st">${core?"always on":skip?"skipped":f.scope==="event"?"event":f.scope==="both"?"live + reading":f.scope}</span></summary>`;
+      h+=`<div class="tx-note">${f.desc}${f.keys?`<br>keys: <i>${f.keys}</i>`:""}${f.requires?`<br>needs: ${f.requires}`:""}${f.why?`<br><b>skipped:</b> ${f.why}`:""}</div>`;
+      for(const pr of (f.params||[])){
+        const v=c[pr.name]??pr.default, t=` title="${pr.help}"`;
+        if(pr.type==="int"||pr.type==="float") h+=`<div class="tx-knob"${t}><span>${pr.name} <span class="tx-note" style="display:inline">· ${pr.help}</span></span><input type="number" step="any" data-p="${P}.${pr.name}" data-k="num" value="${v}"></div>`;
+        else if(pr.type==="bool") h+=`<div class="tx-knob"${t}><span>${pr.name} <span class="tx-note" style="display:inline">· ${pr.help}</span></span><input type="checkbox" data-p="${P}.${pr.name}" data-k="bool"${v?" checked":""}></div>`;
+        else if(pr.type==="multi") h+=`<div class="tx-note">${pr.name} · ${pr.help}</div><div class="grp">${pr.options.map(o=>`<label><input type="checkbox" data-p="${P}.${pr.name}" data-k="multi" data-opts='${JSON.stringify(pr.options)}' value="${o}"${(v||[]).includes(o)?" checked":""}>${o}</label>`).join("")}</div>`;
+        else if(pr.type==="list") h+=`<div class="tx-note">${pr.name} · ${pr.help} · one per line</div><textarea data-p="${P}.${pr.name}" data-k="lines" spellcheck="false">${(v||[]).join("\n")}</textarea>`;
+        else if(pr.type==="dict") h+=`<div class="tx-note">${pr.name} · ${pr.help} · one "name = pattern" per line</div><textarea data-p="${P}.${pr.name}" data-k="dict" spellcheck="false">${Object.entries(v||{}).map(([a,b])=>`${a} = ${b}`).join("\n")}</textarea>`;
+        else if(pr.type==="pairs") h+=`<div class="tx-note">${pr.name} · ${pr.help} · one "reading_a, reading_b" per line</div><textarea data-p="${P}.${pr.name}" data-k="pairs" spellcheck="false">${(v||[]).map(x=>x.join(", ")).join("\n")}</textarea>`;
+      }
+      h+=`</details>`;
+    }
+  }
+  return h;
+}
+function readingForm(r,k){
+  const P=`readings.readings.${k}`;
+  const live=S.D && S.D.levels.l1.readings[r.name], ka=live && live.k_auto;
+  const sugg = ka && ka.chosen ? `<span class="k-sugg">· auto suggests <b>${ka.chosen}</b> (${ka.criterion})</span>` : live ? `<span class="k-sugg">now ${live.n_clusters} clusters${live.noise_class!=null?" + noise":""}</span>` : "";
+  const dm=r.dr.method, cm=r.cluster.method;
+  let h=`<details class="rd" data-k="${k}"><summary>${k+1} · ${r.name} <span class="k">${dm} · ${cm} · ${(r.features.groups||[]).join("+")}</span><span class="x" data-k="${k}" title="remove this reading">✕</span></summary>`;
+  h+=`<div class="tx-knob"><span>name</span><input data-p="${P}.name" value="${r.name}" spellcheck="false" title="letters, digits, _ (it becomes the OSC key prefix)"></div>`;
+  h+=`<div class="sub">features</div><div class="grp">${GROUPS.map(gg=>`<label><input type="checkbox" data-p="${P}.features.groups" data-k="grp" value="${gg}"${(r.features.groups||[]).includes(gg)?" checked":""}>${gg}</label>`).join("")}</div>`;
+  h+=`<div class="grp">summaries: ${["mean","std","min","max"].map(s=>`<label><input type="checkbox" data-p="${P}.features.stats" data-k="grp" value="${s}"${(r.features.stats||[]).includes(s)?" checked":""}>${s}</label>`).join("")}</div>`;
+  h+=`<div class="tx-knob"><span>exclude columns</span><input data-p="${P}.features.exclude" data-k="list" value="${(r.features.exclude||[]).join(", ")}" spellcheck="false" title="comma list; a prefix drops its stats too (tempo → tempo, tempo_*)"></div>`;
+  h+=`<div class="sub">prepare</div>`+knob("scaler",`${P}.scaler.method`,"select",["robust","standard","minmax","center","none"])+knob("clip · ±",`${P}.scaler.clip`,"num","none");
+  h+=knob("balance groups",`${P}.balance_groups`,"bool","","each group counts as one block (÷√columns)")+knob("CLAP weight",`${P}.weights.clap`,"num","1")+knob("PCA first · dims",`${P}.pre_pca`,"num","none");
+  h+=`<div class="sub">map (DR)</div>`+knob("method",`${P}.dr.method`,"select",["pca","umap","tsne","som"]);
+  if(dm==="umap") h+=knob("n_neighbors",`${P}.dr.n_neighbors`,"num")+knob("min_dist",`${P}.dr.min_dist`,"num")+knob("metric",`${P}.dr.metric`,"select",["euclidean","cosine","manhattan","correlation"]);
+  if(dm==="tsne") h+=knob("perplexity",`${P}.dr.perplexity`,"num")+`<div class="tx-note">t-SNE is the slow one: about 10 s for 3400 clips</div>`;
+  if(dm==="som") h+=`<div class="tx-knob"><span>grid</span><input data-p="${P}.dr.som_grid" data-k="list" value="${(r.dr.som_grid||[16,16]).join(", ")}"></div>`;
+  h+=`<div class="sub">clusters</div>`+knob("method",`${P}.cluster.method`,"select",["kmeans","gmm","agglomerative","spectral","hdbscan","dbscan"]);
+  if(!["hdbscan","dbscan"].includes(cm)){
+    const auto=r.cluster.k==="auto";
+    h+=`<div class="tx-knob"><span>k ${sugg}</span><span><input type="number" data-p="${P}.cluster.k" data-k="num" value="${auto?"":r.cluster.k}" placeholder="auto" style="width:60px"${auto?" disabled":""}> <label style="font-size:10px"><input type="checkbox" data-p="${P}.cluster.k" data-k="kauto"${auto?" checked":""}> auto</label></span></div>`;
+    if(auto) h+=`<div class="tx-knob"><span>auto range</span><input data-p="${P}.cluster.k_range" data-k="list" value="${(r.cluster.k_range||[3,10]).join(", ")}"></div>`;
+    h+=`<div class="tx-note">k auto is a suggestion (silhouette; BIC for GMM): it favours few clusters here — for sound, a k you set by ear is often better</div>`;
+  } else h+=knob("min cluster size",`${P}.cluster.min_cluster_size`,"num");
+  h+=knob("cluster in",`${P}.cluster.space`,"select",["feature","dr"],"feature space = the scaled features; dr = the map (or an n-D embedding)");
+  if(r.cluster.space==="dr") h+=knob("n-D embedding · dims",`${P}.cluster.dims`,"num","2","> 2 computes a separate n-D map to cluster in");
+  h+=`<div class="sub">anomaly</div>`+knob("method",`${P}.anomaly.method`,"select",["iforest","lof"])+knob("contamination",`${P}.anomaly.contamination`,"num");
+  return h+`</details>`;
+}
+/* every reading carries its full spec (defaults filled in), in the applied config and the form alike, so the
+   dirty marker compares like with like and the bridge gets explicit values */
+function normalizeKeys(rc){
+  if(!rc || !CAT) return rc;
+  const kc=rc.keys||{}, out={};
+  for(const f of CAT){
+    const e={enabled: f.scope==="core" || (!!f.default && f.scope!=="skipped")};
+    for(const pr of (f.params||[])) e[pr.name]=JSON.parse(JSON.stringify(pr.default));
+    Object.assign(e, kc[f.code]||{});
+    if(f.scope==="core") e.enabled=true; if(f.scope==="skipped") e.enabled=false;
+    out[f.code]=e;
+  }
+  rc.keys=out; return rc;
+}
+function normalizeReadings(rc){
+  if(!rc || !rc.readings) return rc;
+  normalizeKeys(rc);
+  const D=rc.defaults||{};
+  rc.readings = rc.readings.map(r=>{
+    const o=JSON.parse(JSON.stringify(r));
+    for(const sec of ["features","scaler","dr","cluster","anomaly","knn","density"])
+      o[sec]=Object.assign(JSON.parse(JSON.stringify(D[sec]||{})), o[sec]||{});
+    for(const k of ["balance_groups","pre_pca"]) if(o[k]===undefined) o[k]=D[k]??null;
+    o.weights=Object.assign({}, D.weights||{}, o.weights||{});
+    return o; });
+  return rc;
+}
+/* presets */
+async function loadPresets(){ let n=[]; try{ n=await (await fetch("/api/presets")).json(); }catch(e){}
+  $("pr-list").innerHTML=`<option value="">— presets —</option>`+n.map(x=>`<option>${x}</option>`).join(""); }
+$("pr-save").onclick=async()=>{ const name=$("pr-name").value.trim(); if(!name) { $("pr-name").focus(); return; }
+  await fetch("/api/presets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,data:S.form})}); loadPresets();
+  $("cf-status").textContent=`saved lab/presets/${name}.json`; };
+$("pr-load").onclick=async()=>{ const n=$("pr-list").value; if(!n) return; S.form=await (await fetch("/api/presets/"+encodeURIComponent(n))).json(); normalizeReadings(S.form.readings); buildForm(); markDirty(); };
+/* apply · recompute, with staged progress from the engine's JSON-lines events */
+const STAGES=["scan","features","clap","readings","comparison","load"];
+function stages(state){ $("cf-stages").innerHTML=STAGES.map(s=>`<span class="stg ${state[s]||""}">${s}</span>`).join(""); }
+let JOB=null;
+$("cf-apply").onclick=()=>{
+  if(!S.connected){ $("cf-status").textContent="no bridge: start viz/bridge.py"; $("cf-status").classList.add("err"); return; }
+  S.busy=true; $("config-panel").classList.add("busy"); $("cf-cancel").classList.add("on"); $("cf-apply").disabled=true;
+  JOB={t0:performance.now(), st:{}, frac:0, nread:0, totread:0}; stages(JOB.st); bar(0.02);
+  $("cf-status").classList.remove("err"); $("cf-status").textContent="starting…";
+  send({type:"recompute", corpus:S.form.corpus, phase2:S.form.phase2, readings:S.form.readings});
+};
+$("cf-cancel").onclick=()=>{ send({type:"cancel"}); $("cf-status").textContent="stopping… (the picture in view is kept)"; };
+$("cf-undo").onclick=()=>send({type:"undo"});
+$("cf-default").onclick=async()=>{ send({type:"defaults"}); };
+function bar(f){ $("cf-bar").style.width=Math.round(100*Math.max(0,Math.min(1,f)))+"%"; }
+function onEngineEvent(m){
+  if(!JOB) return; const e=m.ev, st=JOB.st, el=$("cf-status");
+  const secs=((performance.now()-JOB.t0)/1000).toFixed(1);
+  if(m.phase==="phase2"){
+    if(e.skipped){ st.scan="skip"; st.features="skip"; st.clap="skip"; bar(0.3); el.textContent=`corpus and features unchanged: Phase 2 skipped · ${secs}s`; }
+    else if(e.type==="stage_start"){ const s=e.stage==="plan"||e.stage==="warmup"?"features":e.stage==="assemble"||e.stage==="write"?"features":e.stage; if(STAGES.includes(s)) st[s]="run"; el.textContent=`${e.stage}… · ${secs}s`; }
+    else if(e.type==="stage_end"){ if(e.stage==="scan") st.scan="done"; if(e.stage==="features"||e.stage==="write") st.features="done"; if(e.stage==="clap") st.clap="done";
+      if(e.stage==="plan") el.textContent=`${e.to_extract} file(s) to extract, the rest cached · ${secs}s`; }
+    else if(e.type==="progress" && e.stage==="features"){ bar(0.05+0.4*e.done/e.total); el.textContent=`features ${e.done}/${e.total} files · ${e.rate?e.rate.toFixed(2):""}/s · eta ${e.eta_s!=null?Math.round(e.eta_s)+"s":"?"}`; }
+    else if(e.type==="progress" && e.stage==="clap"){ st.clap="run"; bar(0.45+0.1*e.done/e.total); el.textContent=`CLAP ${e.done}/${e.total} files · ${secs}s`; }
+    else if(e.type==="file_failed") { el.textContent=`failed: ${e.rel_path} — ${e.error}`; }
+  } else {
+    st.scan=st.scan||"skip"; st.features=st.features||"done"; st.clap=st.clap||"skip";
+    if(e.type==="run_start"){ st.readings="run"; JOB.totread=(e.readings||[]).length*(e.levels||[]).length; }
+    else if(e.type==="stage_start" && e.stage && e.stage.split(".").length===3){ const [lv,n,sg]=e.stage.split("."); el.textContent=`${n} · ${lv} · ${sg}… · ${secs}s`; }
+    else if(e.type==="progress" && e.stage==="readings"){ bar(0.55+0.38*e.done/e.total); const hits=Object.values(e.cache_hits||{}).every(Boolean);
+      el.textContent=`readings ${e.done}/${e.total} · ${e.reading} (${e.level}) ${hits?"from cache":e.seconds+"s"} · ${secs}s`; }
+    else if(e.type==="stage_start" && e.stage==="compare"){ st.readings="done"; st.comparison="run"; el.textContent=`comparing the readings… · ${secs}s`; bar(0.95); }
+    else if(e.type==="stage_end" && e.stage==="compare"){ st.comparison="done"; }
+  }
+  stages(st);
+}
+async function onJob(m){
+  const el=$("cf-status");
+  if(m.state==="start") return;
+  if(m.state==="busy"){ el.textContent="a recompute is already running"; return; }
+  if(m.state==="done" || m.state==="swapped"){
+    if(JOB){ JOB.st.load="run"; stages(JOB.st); }
+    const t=performance.now();
+    if(m.why==="defaults" || m.why==="undo") S.form=null;
+    await loadData(true);
+    const secs = JOB ? ((performance.now()-JOB.t0)/1000).toFixed(1) : null;
+    if(JOB){ JOB.st.load="done"; stages(JOB.st); bar(1); }
+    el.textContent = m.state==="done" ? `done in ${secs}s (engine ${m.timings.total}s: ${m.timings.phase2!=null?"Phase 2 "+m.timings.phase2+"s · ":""}readings ${m.timings.readings}s) · undo keeps the previous result`
+      : m.why==="undo" ? "undone: the previous result is back" : "the shipped defaults are back";
+    $("cf-undo").disabled = m.why==="undo";
+    endJob(true); return;
+  }
+  if(m.state==="cancelled"){ el.textContent="stopped · the picture in view is kept"; endJob(true); return; }
+  if(m.state==="error"){ endJob(true); el.textContent="error: "+m.error; el.classList.add("err"); }
+}
+function endJob(keepStatus){ S.busy=false; JOB=null; $("config-panel").classList.remove("busy"); $("cf-cancel").classList.remove("on"); setTimeout(()=>bar(0),1500);
+  const d=isDirty(); $("config-tab").classList.toggle("dirty",d); $("cf-apply").disabled=!d; $("cf-apply").classList.toggle("edited",d); }
+
+/* ================================================================ probes (S9) and markers (E8) */
+S.probes={}; S.markers={};
+function onProbe(m){
+  if(m.error){ $("pb-note").textContent="probe: "+m.error; $("pb-note").style.color="var(--rubric)"; return; }
+  $("pb-note").style.color=""; 
+  if(m.values==null){ delete S.probes[m.name]; } else S.probes[m.name]={values:m.values, desc:m.desc};
+  $("pb-note").textContent = m.values==null ? "probe cleared" : `${m.name}: ${m.desc} · now in colour by and in Live's _live block`;
+  buildColorSelect(); if(m.values!=null){ S.colorBy=m.name; buildColorSelect(); } render(false,true);
+  if(LGPAGE==="keys") buildKeysPage();
+}
+$("pb-ref").onclick=()=>{ if(S.sel<0){ $("pb-note").textContent="select a clip first"; return; } send({type:"probe", ref:S.sel}); };
+$("pb-textgo").onclick=()=>{ const t=$("pb-text").value.trim(); if(t) send({type:"probe", text:t}); };
+function markersList(){
+  const el=$("mk-list"), L=S.D?S.D.levels.l1:null; if(!L) return; el.innerHTML="";
+  const ent=Object.entries(S.markers||{}); $("mk-n").textContent=ent.length;
+  for(const [cid,m] of ent){ const i=L.clipIdx.get(cid); if(i==null) continue;
+    const row=document.createElement("div"); row.className="tr-row";
+    row.innerHTML=`<span class="nm">◆ ${m.name} · ${trackName(L.file[i])} ${fmtT(L.t0[i])}</span><span class="x" title="remove">✕</span>`;
+    row.querySelector(".nm").onclick=()=>select(i,"select"); row.querySelector(".x").onclick=()=>send({type:"marker", idx:i, remove:true});
+    el.appendChild(row); }
+}
+function addMarker(){ if(S.sel<0) return; send({type:"marker", idx:S.sel}); }
+$("mk-add").onclick=addMarker;
+
+/* ================================================================ keys */
+const typingIn=t=>!!t && (t.isContentEditable || /^(SELECT|TEXTAREA)$/.test(t.tagName) || (t.tagName==="INPUT" && !/^(range|checkbox|radio|button|file)$/i.test(t.type)));
+document.addEventListener("keydown", e=>{
+  if(typingIn(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k=e.key;
+  if(/^[1-6]$/.test(k)) setReading(+k-1);
+  else if(k==="0") resetZoom();
+  else if(k==="i"||k==="I") toggleSide();
+  else if(k==="l"||k==="L") toggleDock("legend");
+  else if(k==="c"||k==="C") toggleDock("config");
+  else if(k==="v"||k==="V") setLevel(S.level==="l1"?"l0":"l1");
+  else if(k==="ArrowRight") step(1);
+  else if(k==="ArrowLeft") step(-1);
+  else if(k===" "){ e.preventDefault(); playOn(); }
+  else if(k==="Escape"){ if(S.playOn) stopPlayOn(); else if(S.draw) toggleDraw(); else deselect(); }
+  else if(k==="r"||k==="R") $("tr-rec").click();
+  else if(k==="b"||k==="B") toggleDraw();
+  else if(k==="p"||k==="P") $("tr-play").click();
+  else if(k==="m"||k==="M") addMarker();
+});
+function syncFreeze(){ document.body.classList.toggle("freeze", document.hidden); }
+document.addEventListener("visibilitychange", syncFreeze); syncFreeze();
+
+/* ================================================================ boot */
+DarkStyle.control($("look"), {btnClass:"wbtn lay"}); DarkStyle.keys();
+applyLook();
+$("lv-l1").classList.add("on"); $("v-l1").classList.add("on");
+$("sd-aud").classList.add("on");
+stages({});
+let CAT=null, CATBY={};
+fetch("/api/keys_catalogue").then(r=>r.json()).then(c=>{ CAT=c; CATBY=Object.fromEntries(c.map(f=>[f.code,f])); })
+  .catch(()=>{}).finally(()=>loadData(false).then(()=>{ connect(); loadTraces(); }).catch(e=>{ console.error(e); $("hear").textContent="could not load /api/data — is viz/bridge.py running?"; }));
+</script>
+</body>
+</html>
