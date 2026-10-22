@@ -1,8 +1,8 @@
 {
- "built": "2026-10-22 16:04:48",
+ "built": "2026-10-22 20:04:06",
  "sources": {
   "viz/index.html": "6810a16465c4b5c2",
-  "web_bridge.js": "d06f917c1a58d5c0",
+  "web_bridge.js": "1b676da9c54bb5da",
   "data/payload.json.gz": "49991b87ea5bab5a"
  },
  "patches": 12,

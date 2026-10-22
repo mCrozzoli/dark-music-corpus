@@ -12,7 +12,8 @@ the clips and their descriptions into Ableton Live.
 - **Max for Live devices** (v0.2, frozen, Live 11.3+ with Max for Live): [`m4l/`](m4l/) — guide in `m4l/README.md`.
 - **Live sets**: [`live/`](live/) — the **DMC Starter** template and the set of the demo piece; guide in `live/README.md`.
 - **Web tool**: https://mcrozzoli.github.io/dark-music-corpus/ — the demo corpus, or **◫ your corpus** to analyse a folder
-  of your own audio in the browser (nothing is uploaded). Link test with the DMC Hub: `probe/ws.html`.
+  of your own audio in the browser (nothing is uploaded), optionally with CLAP (a 73 MB model, downloaded once).
+  Link test with the DMC Hub: `probe/ws.html`.
 - The Live link works in Chrome (after allowing local-network access once) and Firefox; Safari blocks it.
 
 Built with DarkSonification. Designed by Miguel Angel Crozzoli; implemented with Claude AI agents.

@@ -12,7 +12,9 @@
 // S11 (outlier score), S8 (density), S2 (raw features), Y5 (track, folder). Not yet: CLAP readings, the other key
 // families, t-SNE/PCA/SOM, the other clusterings, beat tracking, the readings comparison.
 import { SR, HOP, frameFeatures, summarize, summarizeWhole, rhythm } from "./mir.js";
-import { UMAP } from "../vendor/umap-js.esm.js";
+import { UMAP, Matrix, EigenvalueDecomposition, SingularValueDecomposition } from "../vendor/umap-js.esm.js";
+import * as CLAP from "./clap.js";
+let clapOn = false;
 
 const files = [];                                               // per file: {name, rel_path, folder, file_id, t0, t1, rows, cols, whole, events}
 const post = (m, tr) => self.postMessage(m, tr || []);
@@ -60,8 +62,21 @@ async function addFile(m) {
   const groups = {}; for (const c of cols) { const base = c.replace(/_(mean|std|min|max)$/, "");
     const g = ["tempo", "onset_rate", "beat_strength"].includes(c) ? "rhythm" : ["rms_db", "dynamic_range_db", "peak_db"].includes(c) ? "energy" : groupsOf(base);
     (groups[g] = groups[g] || []).push(c); }
+  const fileWhole = whole.concat([20 * Math.log10(Math.max(pk, 1e-9))], rh.whole);
+  if (clapOn && m.y48) {                                          // CLAP per clip at 48 kHz (dmc.clap.embed_file), then the file mean
+    const E = [];
+    for (let k = 0; k < t0.length; k++) {
+      let a = Math.round(t0[k] * CLAP.CLAP_SR), b = Math.round(t1[k] * CLAP.CLAP_SR);
+      if (b - a > CLAP.MAX) { const c = (a + b) >> 1; a = c - CLAP.MAX / 2; b = a + CLAP.MAX; }
+      E.push(await CLAP.embed(m.y48.subarray(Math.max(0, a), Math.min(m.y48.length, b))));
+      if (k % 8 === 7 || k === t0.length - 1) post({ type: "progress", stage: "clap", file: m.i + 1, total: m.total, done: k + 1, of: t0.length, name: m.name });
+    }
+    const cc = Array.from({ length: E[0].length }, (_, j) => `clap_${j}`);
+    rows.forEach((r, k) => { for (const v of E[k]) r.push(v); }); cols.push(...cc); groups.clap = cc;
+    for (const v of CLAP.l2mean(E)) fileWhole.push(v);
+  }
   files[m.i] = { name: m.name, rel_path: rel, folder: m.folder || "", file_id: fid, duration: dur, t0, t1, cols, rows, groups,
-                 whole: whole.concat([20 * Math.log10(Math.max(pk, 1e-9))], rh.whole), events: { onset_t: rh.onset_t, onset_s: rh.onset_s, beat_t: [] } };
+                 whole: fileWhole, events: { onset_t: rh.onset_t, onset_s: rh.onset_s, beat_t: [] } };
 }
 
 // ------------------------------------------------------------------ readings (readings.py)
@@ -71,10 +86,10 @@ function selectColumns(groups, spec) {
   const blocks = {}; for (const g of f.groups || []) { const cols = (groups[g] || []).filter(wanted); if (cols.length) blocks[g] = cols; }
   return blocks;
 }
-function prepare(get, n, blocks, spec) {                        // readings.prepare: impute, drop constant, robust scale + clip
-  const sc = spec.scaler || { method: "robust", clip: 5 }, out = [], used = {};
+function prepare(get, n, blocks, spec) {                        // readings.prepare: impute, drop constant, scale (+ clip), weight blocks, pre-PCA
+  const sc = spec.scaler || { method: "robust", clip: 5 }, out = [], used = {}, weights = spec.weights || {};
   for (const [b, cols] of Object.entries(blocks)) {
-    let kept = 0;
+    let kept = 0; const start = out.length;
     for (const c of cols) {
       let v = Float64Array.from({ length: n }, (_, i) => get(c, i)); const fin = Array.from(v).filter(Number.isFinite);
       const med0 = fin.length ? median(fin) : 0; for (let i = 0; i < n; i++) if (!Number.isFinite(v[i])) v[i] = med0;
@@ -82,13 +97,29 @@ function prepare(get, n, blocks, spec) {                        // readings.prep
       if (!(sd > 1e-12)) continue;
       if (sc.method === "robust" || !sc.method) { const s = Float64Array.from(v).sort(); let iqr = quantile(s, 0.75) - quantile(s, 0.25); if (!(iqr > 1e-12)) iqr = sd; const md = quantile(s, 0.5); v = v.map((x) => (x - md) / (iqr > 1e-12 ? iqr : 1)); }
       else if (sc.method === "standard") v = v.map((x) => (x - mu) / sd);
+      else if (sc.method === "center") v = v.map((x) => x - mu);
+      else if (sc.method === "minmax") { let lo = Infinity, hi = -Infinity; for (const x of v) { lo = Math.min(lo, x); hi = Math.max(hi, x); } v = v.map((x) => hi - lo > 1e-12 ? (x - lo) / (hi - lo) : x - lo); }
       if (sc.clip) v = v.map((x) => Math.max(-sc.clip, Math.min(sc.clip, x)));
       out.push(v); kept++;
     }
-    if (kept) used[b] = kept;
+    if (kept) { let w = +(weights[b] ?? 1); if (spec.balance_groups) w /= Math.sqrt(kept);
+      if (w !== 1) for (let j = start; j < out.length; j++) out[j] = out[j].map((x) => x * w);
+      used[b] = kept; }
   }
-  const X = Array.from({ length: n }, (_, i) => Float64Array.from(out, (col) => col[i]));
-  return { X, features: used, dims: out.length };
+  let X = Array.from({ length: n }, (_, i) => Float64Array.from(out, (col) => col[i]));
+  const pre = spec.pre_pca;
+  if (pre && X[0].length > pre) X = pca(X, Math.min(pre, n - 1, X[0].length));
+  return { X, features: used, dims: X[0].length };
+}
+function pca(X, k) {                                             // centred PCA via the d×d covariance's eigenvectors (sklearn PCA up to sign)
+  const n = X.length, d = X[0].length, mu = new Float64Array(d);
+  for (const x of X) for (let j = 0; j < d; j++) mu[j] += x[j] / n;
+  const C = Array.from({ length: d }, () => new Float64Array(d));
+  for (const x of X) for (let a = 0; a < d; a++) { const xa = x[a] - mu[a]; if (!xa) continue; const Ca = C[a]; for (let b = a; b < d; b++) Ca[b] += xa * (x[b] - mu[b]); }
+  for (let a = 0; a < d; a++) for (let b = a; b < d; b++) { C[a][b] /= (n - 1); C[b][a] = C[a][b]; }
+  const e = new EigenvalueDecomposition(new Matrix(C.map((r) => Array.from(r))), { assumeSymmetric: true });
+  const ev = e.realEigenvalues, V = e.eigenvectorMatrix, order = ev.map((v, i) => i).sort((a, b) => ev[b] - ev[a]).slice(0, k);
+  return X.map((x) => Float64Array.from(order, (c) => { let s = 0; for (let j = 0; j < d; j++) s += (x[j] - mu[j]) * V.get(j, c); return s; }));
 }
 const d2 = (a, b) => { let s = 0; for (let k = 0; k < a.length; k++) { const t = a[k] - b[k]; s += t * t; } return s; };
 function kmeans(X, k, seed, nInit = 10, iters = 100) {
@@ -123,21 +154,114 @@ function silhouette(X, lab, sampleN, seed) {                    // sklearn silho
   }
   return cnt ? tot / cnt : 0;
 }
-function clustering(X, cl, seed) {                              // readings.run_clustering, k-means only for now
-  const n = X.length; let labels, info = { method: "kmeans" };
+function fitLabels(X, cl, k, seed) {                            // readings._fit_labels
+  if (cl.method === "gmm") return gmm(X, k, seed);
+  if (cl.method === "spectral") return { lab: spectral(X, k, Math.min(cl.n_neighbors ?? 15, X.length - 1), seed), bic: null };
+  return { lab: kmeans(X, k, seed), bic: null };
+}
+function clustering(X, cl, seed) {                              // readings.run_clustering: kmeans · gmm (BIC) · spectral
+  const n = X.length, method = ["gmm", "spectral"].includes(cl.method) ? cl.method : "kmeans"; let labels, info = { method };
+  const c2 = Object.assign({}, cl, { method });
   if (n < 3) labels = new Int32Array(n);
   else if (cl.k === "auto") {
     const [lo, hi] = cl.k_range || [3, 10], scores = {}; let best = null;
-    for (let k = Math.max(2, lo); k <= Math.min(hi, n - 1); k++) { const lab = kmeans(X, k, seed); if (new Set(lab).size < 2) continue;
-      const s = silhouette(X, lab, Math.min(n, 2000), seed); scores[k] = +s.toFixed(4); if (!best || s > best[1]) best = [k, s, lab]; }
-    labels = best ? best[2] : new Int32Array(n); if (best) info.k_auto = { criterion: "silhouette", scores, chosen: best[0] };
-  } else labels = kmeans(X, Math.min(+cl.k || 6, Math.max(1, n - 1)), seed);
+    for (let k = Math.max(2, lo); k <= Math.min(hi, n - 1); k++) { const { lab, bic } = fitLabels(X, c2, k, seed); if (new Set(lab).size < 2) continue;
+      const s = method === "gmm" ? -bic : silhouette(X, lab, Math.min(n, 2000), seed); scores[k] = +s.toFixed(4); if (!best || s > best[1]) best = [k, s, lab]; }
+    labels = best ? best[2] : new Int32Array(n); if (best) info.k_auto = { criterion: method === "gmm" ? "bic" : "silhouette", scores, chosen: best[0] };
+  } else labels = fitLabels(X, c2, Math.min(+cl.k || 6, Math.max(1, n - 1)), seed).lab;
   const sizes = {}; for (const c of labels) sizes[c] = (sizes[c] || 0) + 1;
   const order = Object.keys(sizes).map(Number).sort((a, b) => sizes[b] - sizes[a] || a - b), remap = new Map(order.map((c, i) => [c, i]));
   const out = Int32Array.from(labels, (c) => remap.get(c));
   info.n_clusters = order.length; info.noise_class = null; info.sizes = order.map((c) => sizes[c]);
   if (order.length >= 2) info.silhouette = +silhouette(X, out, Math.min(n, 2000), seed).toFixed(4);
   return { labels: out, info };
+}
+function gmm(X, k, seed, nInit = 2, iters = 100, reg = 1e-4) {   // sklearn GaussianMixture, full covariances (d ≤ 10), k-means init, BIC
+  const n = X.length, d = X[0].length; let best = null;
+  for (let run = 0; run < nInit; run++) {
+    const init = kmeans(X, k, seed + run, 1, 50);
+    let R = Array.from({ length: n }, (_, i) => { const r = new Float64Array(k); r[init[i]] = 1; return r; }), ll = -Infinity, params = null;
+    for (let it = 0; it < iters; it++) {
+      // M step
+      const w = new Float64Array(k), mu = Array.from({ length: k }, () => new Float64Array(d)), cov = [];
+      for (let i = 0; i < n; i++) for (let c = 0; c < k; c++) { const r = R[i][c]; if (!r) continue; w[c] += r; for (let j = 0; j < d; j++) mu[c][j] += r * X[i][j]; }
+      for (let c = 0; c < k; c++) for (let j = 0; j < d; j++) mu[c][j] /= Math.max(w[c], 1e-300);
+      const chol = [], logdet = [];
+      for (let c = 0; c < k; c++) {
+        const S = Array.from({ length: d }, () => new Float64Array(d));
+        for (let i = 0; i < n; i++) { const r = R[i][c]; if (!r) continue; for (let a = 0; a < d; a++) { const xa = X[i][a] - mu[c][a]; for (let b = 0; b <= a; b++) S[a][b] += r * xa * (X[i][b] - mu[c][b]); } }
+        for (let a = 0; a < d; a++) { for (let b = 0; b <= a; b++) { S[a][b] /= Math.max(w[c], 1e-300); S[b][a] = S[a][b]; } S[a][a] += reg; }
+        const L = Array.from({ length: d }, () => new Float64Array(d)); let ld = 0;     // Cholesky
+        for (let a = 0; a < d; a++) for (let b = 0; b <= a; b++) { let s = S[a][b]; for (let t = 0; t < b; t++) s -= L[a][t] * L[b][t];
+          if (a === b) { L[a][a] = Math.sqrt(Math.max(s, 1e-300)); ld += 2 * Math.log(L[a][a]); } else L[a][b] = s / L[b][b]; }
+        chol.push(L); logdet.push(ld); cov.push(S);
+      }
+      const pi = Array.from(w, (x) => x / n);
+      // E step
+      let tot = 0; const R2 = [];
+      for (let i = 0; i < n; i++) {
+        const lp = new Float64Array(k);
+        for (let c = 0; c < k; c++) { const L = chol[c], z = new Float64Array(d); let q = 0;
+          for (let a = 0; a < d; a++) { let s = X[i][a] - mu[c][a]; for (let t = 0; t < a; t++) s -= L[a][t] * z[t]; z[a] = s / L[a][a]; q += z[a] * z[a]; }
+          lp[c] = Math.log(Math.max(pi[c], 1e-300)) - 0.5 * (d * Math.log(2 * Math.PI) + logdet[c] + q); }
+        let mx = -Infinity; for (const v of lp) mx = Math.max(mx, v); let s = 0; for (const v of lp) s += Math.exp(v - mx); const lse = mx + Math.log(s);
+        tot += lse; R2.push(Float64Array.from(lp, (v) => Math.exp(v - lse)));
+      }
+      R = R2; params = { tot };
+      if (Math.abs(tot - ll) < 1e-3 * n) { ll = tot; break; } ll = tot;
+    }
+    const lab = Int32Array.from(R, (r) => { let b = 0; for (let c = 1; c < k; c++) if (r[c] > r[b]) b = c; return b; });
+    const np = k * d * (d + 1) / 2 + k * d + k - 1, bic = -2 * ll + np * Math.log(n);
+    if (!best || ll > best.ll) best = { ll, lab, bic };
+  }
+  return { lab: best.lab, bic: best.bic };
+}
+function spectral(X, k, nn, seed) {                              // sklearn SpectralClustering(affinity="nearest_neighbors", assign_labels="cluster_qr")
+  const n = X.length, kn = knn(X, nn - 1);                       // kneighbors_graph(include_self=True): self + nn−1 others
+  const A = Array.from({ length: n }, () => new Map());
+  // the self-links of kneighbors_graph(include_self=True) are dropped: scipy's normed laplacian ignores the diagonal (and
+  // sklearn then sets the Laplacian's diagonal to 1), so neither the matrix nor the degrees carry them
+  for (let i = 0; i < n; i++) for (let t = 0; t < kn.k; t++) { const j = kn.idx[i * kn.k + t]; A[i].set(j, (A[i].get(j) || 0) + 0.5); A[j].set(i, (A[j].get(i) || 0) + 0.5); }
+  const deg = Float64Array.from(A, (m) => { let s = 0; for (const v of m.values()) s += v; return s; }), dd = Float64Array.from(deg, (x) => Math.sqrt(x));
+  // top-k eigenvectors of S = D^-½ A D^-½ (= the smallest of the normalised Laplacian, as sklearn's spectral_embedding
+  // finds with shift-invert ARPACK). Their eigenvalues crowd just under 1 (gaps of 1e-4), which power iteration cannot
+  // separate, so: Lanczos with full reorthogonalisation, m = min(n, 40 + 20·k) steps, Ritz vectors of the top k.
+  const R = rng(seed + 29), mult = (v) => { const out = new Float64Array(n); for (let i = 0; i < n; i++) { let s = 0; for (const [j, a] of A[i]) s += a * v[j] / (dd[i] * dd[j]); out[i] = s; } return out; };
+  // A disconnected graph repeats the eigenvalue 1 once per connected piece, and a single Lanczos run finds only one
+  // direction of a repeated eigenvalue. Each piece's vector (√degree on the piece, 0 elsewhere) is that eigenvector
+  // exactly, so they are taken as they are and Lanczos runs on what is orthogonal to them (cluster_qr depends only on the
+  // subspace, so any basis of it gives sklearn's labels).
+  const comp = new Int32Array(n).fill(-1); let nc = 0;
+  for (let s0 = 0; s0 < n; s0++) if (comp[s0] < 0) { const st = [s0]; comp[s0] = nc; while (st.length) { const i = st.pop(); for (const j of A[i].keys()) if (comp[j] < 0) { comp[j] = nc; st.push(j); } } nc++; }
+  const csize = new Int32Array(nc); for (const c of comp) csize[c]++;
+  const compOrder = Array.from({ length: nc }, (_, c) => c).sort((a, b) => csize[b] - csize[a]).slice(0, k);
+  const fixed = compOrder.map((c) => { const u = Float64Array.from({ length: n }, (_, i) => comp[i] === c ? dd[i] : 0); const nu = Math.sqrt(u.reduce((a, x) => a + x * x, 0)); return u.map((x) => x / nu); });
+  const need = k - fixed.length;
+  const deflate = (w) => { for (const u of fixed) { let p = 0; for (let i = 0; i < n; i++) p += w[i] * u[i]; for (let i = 0; i < n; i++) w[i] -= p * u[i]; } return w; };
+  const m = Math.min(n - fixed.length, 300 + 20 * k), Qv = [], al = [], be = [];
+  let q = deflate(Float64Array.from({ length: n }, () => R() - 0.5)), nq = Math.sqrt(q.reduce((a, x) => a + x * x, 0)); q = q.map((x) => x / nq);
+  for (let j = 0; need > 0 && j < m; j++) {
+    Qv.push(q); const w = mult(q); let a = 0; for (let i = 0; i < n; i++) a += w[i] * q[i]; al.push(a);
+    for (let i = 0; i < n; i++) w[i] -= a * q[i] + (j ? be[j - 1] * Qv[j - 1][i] : 0);
+    for (let pass = 0; pass < 2; pass++) { deflate(w); for (const u of Qv) { let p = 0; for (let i = 0; i < n; i++) p += w[i] * u[i]; for (let i = 0; i < n; i++) w[i] -= p * u[i]; } }
+    const b = Math.sqrt(w.reduce((acc, x) => acc + x * x, 0)); if (j === m - 1 || b < 1e-10) break;
+    be.push(b); q = w.map((x) => x / b);
+  }
+  const vecs = fixed.slice();
+  if (need > 0) {
+    const mm = Qv.length, T = Array.from({ length: mm }, (_, a) => Array.from({ length: mm }, (_, b) => a === b ? al[a] : Math.abs(a - b) === 1 ? be[Math.min(a, b)] : 0));
+    const te = new EigenvalueDecomposition(new Matrix(T), { assumeSymmetric: true }), tv = te.realEigenvalues, TQ = te.eigenvectorMatrix;
+    for (const c of tv.map((v, i) => i).sort((a, b) => tv[b] - tv[a]).slice(0, need)) vecs.push(Float64Array.from({ length: n }, (_, i) => { let s = 0; for (let a = 0; a < mm; a++) s += Qv[a][i] * TQ.get(a, c); return s; }));
+  }
+  let E = Array.from({ length: n }, (_, i) => Float64Array.from(vecs, (v) => v[i] / dd[i]));
+  // cluster_qr: pivoted QR on Eᵀ picks k rows; an SVD aligns them; labels = argmax |E · U Vᵀ|
+  const cols = E.map((r) => Float64Array.from(r)), piv = [];
+  for (let t = 0; t < k; t++) { let bi = -1, bn = -1; for (let i = 0; i < n; i++) { if (piv.includes(i)) continue; let s = 0; for (const x of cols[i]) s += x * x; if (s > bn) { bn = s; bi = i; } }
+    piv.push(bi); const q = cols[bi], qn = Math.sqrt(bn) || 1; const u = Float64Array.from(q, (x) => x / qn);
+    for (let i = 0; i < n; i++) { let p = 0; for (let c = 0; c < k; c++) p += cols[i][c] * u[c]; for (let c = 0; c < k; c++) cols[i][c] -= p * u[c]; } }
+  const P = new Matrix(Array.from({ length: k }, (_, c) => piv.map((i) => E[i][c])));   // E[piv].T : k × k
+  const sv = new SingularValueDecomposition(P), U = sv.leftSingularVectors, W = sv.rightSingularVectors, Rot = U.mmul(W.transpose());
+  return Int32Array.from(E, (r) => { let b = 0, bv = -Infinity; for (let c = 0; c < k; c++) { let s = 0; for (let a = 0; a < k; a++) s += r[a] * Rot.get(a, c); s = Math.abs(s); if (s > bv) { bv = s; b = c; } } return b; });
 }
 function iforest(X, contamination = 0.03, seed = 42, nTrees = 200) {   // sklearn IsolationForest: max_samples 256, score = mean path
   const n = X.length, d = X[0].length, R = rng(seed + 13), psi = Math.min(256, n), H = Math.ceil(Math.log2(psi));
@@ -168,11 +292,15 @@ const unit = (v) => { let lo = Infinity, hi = -Infinity; for (const x of v) { lo
 function computeReading(get, n, groups, spec, level, progress) {
   const blocks = selectColumns(groups, spec), { X, features } = prepare(get, n, blocks, spec), seed = spec.seed ?? 42;
   progress("dr");
-  let emb;
-  if (n <= 3) emb = X.map((x) => [x[0] || 0, x[1] || 0]);
-  else { const nn = Math.max(2, Math.min(spec.dr.n_neighbors ?? 15, n - 1));
-         emb = new UMAP({ nComponents: 2, nNeighbors: nn, minDist: spec.dr.min_dist ?? 0.1, random: rng(seed) }).fit(X.map((r) => Array.from(r))); }
-  progress("cluster"); const cl = clustering(X, spec.cluster || { k: "auto" }, seed);
+  const cosine = (a, b) => { let s = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { s += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; } return 1 - s / (Math.sqrt(na * nb) || 1); };
+  const umap = (dims) => { if (n <= dims + 1) return X.map((x) => Array.from({ length: dims }, (_, j) => x[j] || 0));
+    const nn = Math.max(2, Math.min(spec.dr.n_neighbors ?? 15, n - 1)), opt = { nComponents: dims, nNeighbors: nn, minDist: spec.dr.min_dist ?? 0.1, random: rng(seed) };
+    if (spec.dr.metric === "cosine") opt.distanceFn = cosine;
+    return new UMAP(opt).fit(X.map((r) => Array.from(r))); };
+  const emb = umap(2);
+  const cs = spec.cluster || { k: "auto" }; let Zc = X;
+  if ((cs.space || "feature") === "dr") { const cd = +(cs.dims || 2); Zc = cd === 2 ? emb : (progress("dr_cluster"), umap(cd)); }
+  progress("cluster"); const cl = clustering(Zc.map((r) => Float64Array.from(r)), cs, seed);
   progress("anomaly"); const an = n >= 5 ? iforest(X, (spec.anomaly || {}).contamination ?? 0.03, seed) : { flag: new Int32Array(n), score: new Float64Array(n) };
   progress("knn"); const kn = knn(X, (spec.knn || {}).k ?? 10), k2 = knn(emb, 10);
   const inv = new Float64Array(n); for (let i = 0; i < n; i++) { let s = 0; for (let t = 0; t < k2.k; t++) s += k2.dist[i * k2.k + t]; inv[i] = k2.k ? 1 / (s / k2.k + 1e-12) : 1; }
@@ -205,7 +333,7 @@ function finish(cfg) {
     const o = Object.assign({}, a); for (const [k, v] of Object.entries(b)) o[k] = merge(a[k], v); return o; };
   const rc = cfg.readings || {}, defs = rc.defaults || {};
   const specs = (rc.readings || []).map((r) => Object.assign(merge(defs, Object.fromEntries(Object.entries(r).filter(([k]) => k !== "name"))), { name: r.name, seed: r.seed ?? rc.seed ?? 42 }))
-    .filter((s) => !((s.features || {}).groups || []).includes("clap"));
+    .filter((s) => groups.clap || !((s.features || {}).groups || []).includes("clap"));
   if (!specs.length) specs.push({ name: "mir_umap", features: { groups: ["spectral", "energy", "mfcc", "chroma", "rhythm"], stats: ["mean", "std"], exclude: ["tempo"] },
                                   scaler: { method: "robust", clip: 5 }, dr: { method: "umap", n_neighbors: 15, min_dist: 0.1 }, cluster: { method: "kmeans", k: "auto", k_range: [3, 10] },
                                   anomaly: { method: "iforest", contamination: 0.03 }, knn: { k: 10 }, seed: 42 });
@@ -241,7 +369,8 @@ function finish(cfg) {
   const version = String(Date.now());
   const payload = { version, label: "your corpus", corpus: "your corpus", corpus_name: cfg.corpus_name || "your_corpus", readings: specs.map((s) => s.name),
     live: Object.keys(levels.l1.feats), keys: { live: live.map(meta), readings: Object.fromEntries(Object.entries(rkeys).map(([n, ks]) => [n, ks.map(meta)])),
-      warnings: ["computed in your browser: the CLAP readings and some key families of the desktop engine are not available here yet"] },
+      warnings: [groups.clap ? "computed in your browser: some key families of the desktop engine are not available here yet"
+                                 : "computed in your browser without CLAP: the CLAP readings need the CLAP step (◫ your corpus → + CLAP)"] },
     tracks: F.map((f) => ({ file_id: f.file_id, name: f.name.replace(/\.[^.]+$/, ""), rel_path: f.rel_path, duration: +f.duration.toFixed(2) })),
     levels, comparison: {}, config: { phase2: cfg.phase2 || {}, readings: cfg.readings || {} } };
   const link = { set_id: `dmc_${payload.corpus_name}`, version: "web-0.1", live_block: "_live", live_keys: live.map(tuple),
@@ -249,14 +378,21 @@ function finish(cfg) {
     readings: Object.fromEntries(Object.entries(rkeys).map(([n, ks]) => [n, { osc_keys: ks.map(tuple), infos: Object.fromEntries(ks.map((k) => [k.name, k.desc])) }])),
     families: { E1: { enabled: true }, E3: { enabled: true }, E4: { enabled: true, onsets: true, beats: false, min_strength: 0.1 }, E5: { enabled: false }, E6: { enabled: true }, E7: { enabled: true }, E8: { enabled: true } },
     events_e4: Object.fromEntries(F.map((f) => [f.file_id, f.events])) };
-  return { payload, link };
+  // the clips' CLAP embeddings for the page's reference probe (bridge.compute_probe: CLAP, centred), when computed
+  let clap = null;
+  if (groups.clap) { const cc = groups.clap.map((c) => ci.get(c)), d = cc.length; clap = new Float32Array(n1 * d);
+    l1.forEach((e, i) => { for (let j = 0; j < d; j++) clap[i * d + j] = e.r[cc[j]]; }); }
+  return { payload, link, clap };
 }
 
 self.onmessage = async (ev) => {
   const m = ev.data;
   try {
     if (m.type === "file") { await addFile(m); post({ type: "progress", stage: "features", done: m.i + 1, total: m.total, name: m.name }); }
-    else if (m.type === "reset") files.length = 0;
-    else if (m.type === "finish") { const t = performance.now(); const r = finish(m.config || {}); post({ type: "done", ...r, seconds: +((performance.now() - t) / 1000).toFixed(1) }); }
+    else if (m.type === "reset") { files.length = 0; clapOn = false; }
+    else if (m.type === "clap") { await CLAP.load(m.model, m.ort, m.wasm, (got, total) => post({ type: "progress", stage: "clap_model", got, total }));
+                                   clapOn = true; post({ type: "clap_ready", threads: CLAP.threads() }); }
+    else if (m.type === "finish") { const t = performance.now(); const r = finish(m.config || {}); post({ type: "done", ...r, seconds: +((performance.now() - t) / 1000).toFixed(1) }, r.clap ? [r.clap.buffer] : []); }
   } catch (e) { post({ type: "error", error: String(e && e.stack || e) }); }
 };
+export { spectral, kmeans, silhouette, clustering, gmm };

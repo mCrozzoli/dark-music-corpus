@@ -98,6 +98,11 @@ preprocessing, data processing, mapping utilities) and its web style kit (`darks
   **ml-matrix** 6.15.1, **ml-levenberg-marquardt** 2.1.1, **ml-array-max/min/rescale** 2.0.0 and **is-any-array** 0.1.1 (all MIT).
 - The MIR features, segmentation, rhythm, scaling, k-means with silhouette, Isolation Forest, kNN and keys are a
   JavaScript port of this project's engine (librosa 0.11 formulas; scikit-learn's algorithms), written for this page.
+- **ONNX Runtime Web** 1.30.0 by Microsoft (MIT): runs the CLAP audio encoder in the browser (WASM).
+- **CLAP audio encoder** of `laion/larger_clap_music` (Apache-2.0, LAION; Wu et al., ICASSP 2023), exported to ONNX
+  (opset 17) and quantised to 8-bit weights for the page: `models/clap/audio_model_int8.onnx`, with its notice in
+  `models/clap/NOTICE.md`. CLAP's input features are a JavaScript port of Hugging Face Transformers'
+  `ClapFeatureExtractor` (Apache-2.0).
 - **Rubik** and **Karla** typefaces (SIL Open Font License 1.1), served by Google Fonts through the style kit.
 - Demo excerpts encoded with **FFmpeg** (libopus, LAME); the tool itself ships no FFmpeg code.
 - Hosting: **GitHub Pages**.

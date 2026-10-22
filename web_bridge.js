@@ -28,6 +28,13 @@
 
   // ------------------------------------------------------------------ the dataset (demo for now; own corpus in Phase D)
   const W = (window.DMC_WEB = { ready: null, data: null, link: null, audio: null, mode: "demo" });
+  // cross-origin isolation (CLAP on several threads): register coi-sw.js once and reload once; never loop
+  if (!self.crossOriginIsolated && "serviceWorker" in navigator && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname) || (!self.crossOriginIsolated && new URLSearchParams(location.search).get("coi") === "1")) {
+    navigator.serviceWorker.register(url("coi-sw.js")).then((reg) => {
+      let tried = false; try { tried = sessionStorage.getItem("dmc.coi") === "1"; } catch (_) {}
+      if (!tried && !navigator.serviceWorker.controller) { try { sessionStorage.setItem("dmc.coi", "1"); } catch (_) {} location.reload(); }
+    }).catch(() => {});
+  }
   W.ready = (async () => {
     const [data, link] = await Promise.all([gunzipJson("data/payload.json.gz"), staticJson("data/link.json")]);
     W.data = data; W.linkData = link;
@@ -302,11 +309,13 @@
         case "cancel": break;
       }
     }
-    probe(m) {                                                   // S9: reference clip (MIR space, centred) — CLAP and text later
+    probe(m) {                                                   // S9: reference clip — CLAP space centred when computed, else the live features
       try {
         if (m.clear) { delete this.probes[m.name]; this.link.announceLive(); return this.push({ type: "probe", name: m.name, desc: "", values: null }); }
         if (m.text != null) throw new Error("the text probe needs the CLAP text model, which this page does not load yet");
-        const L = W.data.levels.l1, feats = Object.keys(L.feats), n = L.n, ref = m.ref | 0;
+        const L = W.data.levels.l1, n = L.n, ref = m.ref | 0;
+        if (W.mode === "own" && W.clap) return this.probeClap(ref);
+        const feats = Object.keys(L.feats);
         const A = feats.map((k) => { const v = L.feats[k], s = v.slice().sort((a, b) => a - b), med = s[n >> 1]; let sd = 0, mu = 0;
           for (const x of v) mu += x; mu /= n; for (const x of v) sd += (x - mu) ** 2; sd = Math.sqrt(sd / n) + 1e-9; return v.map((x) => (x - med) / sd); });
         const norm = new Float64Array(n); for (let i = 0; i < n; i++) { let s = 0; for (const c of A) s += c[i] * c[i]; norm[i] = Math.sqrt(s) + 1e-9; }
@@ -318,6 +327,17 @@
         this.link.announceLive();
         this.push({ type: "probe", name, desc, values: vals });
       } catch (e) { this.push({ type: "probe", error: String(e.message || e) }); }
+    }
+    probeClap(ref) {                                              // bridge.compute_probe "reference": CLAP, centred (CLAP is anisotropic)
+      const L = W.data.levels.l1, n = L.n, C = W.clap, d = C.length / n, mu = new Float64Array(d);
+      for (let i = 0; i < n; i++) for (let j = 0; j < d; j++) mu[j] += C[i * d + j] / n;
+      const nrm = new Float64Array(n); for (let i = 0; i < n; i++) { let s = 0; for (let j = 0; j < d; j++) { const v = C[i * d + j] - mu[j]; s += v * v; } nrm[i] = Math.sqrt(s) + 1e-9; }
+      const vals = new Array(n); for (let i = 0; i < n; i++) { let s = 0; for (let j = 0; j < d; j++) s += (C[i * d + j] - mu[j]) * (C[ref * d + j] - mu[j]); vals[i] = +(s / (nrm[i] * nrm[ref])).toFixed(4); }
+      const name = "probe.reference", desc = `cosine similarity (CLAP, centred) to the reference clip ${L.clip_id[ref]}`;
+      let mn = Infinity, mx = -Infinity, mu2 = 0; for (const v of vals) { mn = Math.min(mn, v); mx = Math.max(mx, v); mu2 += v; } mu2 /= n;
+      let sd = 0; for (const v of vals) sd += (v - mu2) ** 2; sd = Math.sqrt(sd / n);
+      this.probes[name] = { values: vals, desc, key: [name, "signal", mn, mx, mu2, sd, 0, -1, "S9"] };
+      this.link.announceLive(); this.push({ type: "probe", name, desc, values: vals });
     }
   }
 
@@ -345,7 +365,7 @@
     });
   }
   function adopt(r, files) {
-    W.data = r.payload; W.linkData = r.link; W.mode = "own";
+    W.data = r.payload; W.linkData = r.link; W.mode = "own"; W.clap = r.clap || null;
     W.clipRow = new Map(r.payload.levels.l1.clip_id.map((c, i) => [c, i]));
     W.clipAt = new Map(r.payload.levels.l1.clip_id.map((c, i) => [`${r.payload.levels.l1.file[i]}@${(+r.payload.levels.l1.t0[i]).toFixed(3)}`, c]));
     if (files) { OWN.files = files; OWN.decoded.clear(); for (const u of W.audio.urls.values()) URL.revokeObjectURL(u); W.audio.urls.clear(); }
@@ -356,8 +376,21 @@
     const all = Array.from(list).filter((f) => AUDIO_EXT.test(f.name)).sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
     if (!all.length) { note("no audio files in that folder (wav, aif, flac, mp3, m4a, ogg)", true); return; }
     const root = (all[0].webkitRelativePath || "").split("/")[0] || "your_corpus";
+    const mb = all.reduce((s, f) => s + f.size, 0) / 1e6;
+    const withClap = await new Promise((res) => {
+      note(`<b>${root}</b> · ${all.length} files (${mb.toFixed(0)} MB). Analyse with:<div style="display:flex;gap:8px;margin-top:8px">` +
+           `<button class="wbtn" id="wc-mir">sound features</button><button class="wbtn" id="wc-clap">sound features + CLAP</button></div>` +
+           `<div style="margin-top:6px;opacity:.75">CLAP adds an AI audio embedding: two more maps, closer to how sounds are perceived. It downloads a 73 MB model once and takes about ${self.crossOriginIsolated ? "a quarter of a second" : "a second or more"} per clip (one clip per second of audio). Nothing is uploaded either way.</div>`);
+      document.getElementById("wc-mir").onclick = () => res(false); document.getElementById("wc-clap").onclick = () => res(true);
+    });
     const t0 = performance.now(), ctx = new AudioContext(), w = engine(), files = [];
     w.postMessage({ type: "reset" });
+    if (withClap) {
+      await new Promise((res, rej) => { w.onmessage = (ev) => { const m = ev.data;
+          if (m.type === "progress" && m.stage === "clap_model") note(`loading the CLAP model · ${(m.got / 1e6).toFixed(0)}${m.total ? " / " + (m.total / 1e6).toFixed(0) : ""} MB (once; the browser keeps it)`);
+          else if (m.type === "clap_ready") { W.clapThreads = m.threads; res(); } else if (m.type === "error") rej(new Error(m.error)); };
+        w.postMessage({ type: "clap", model: url("models/clap/audio_model_int8.onnx"), ort: url("vendor/ort/ort.wasm.min.mjs"), wasm: url("vendor/ort/") }); });
+    }
     const unplayable = all.filter((f) => /\.(ogg|opus)$/i.test(f.name)).length;
     let i = 0;
     for (const f of all) {
@@ -368,8 +401,11 @@
         const off = new OfflineAudioContext(1, Math.ceil(dec.duration * 22050), 22050), src = off.createBufferSource();
         src.buffer = dec; src.connect(off.destination); src.start();
         const y = (await off.startRendering()).getChannelData(0);
+        let y48 = null;
+        if (withClap) { const o48 = new OfflineAudioContext(1, Math.ceil(dec.duration * 48000), 48000), s48 = o48.createBufferSource();
+          s48.buffer = dec; s48.connect(o48.destination); s48.start(); y48 = (await o48.startRendering()).getChannelData(0); }
         const k = files.length; files.push(f);
-        await runWorkerFile({ type: "file", i: k, total: all.length, name: f.name, rel_path: rel, folder: rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "", y }, y);
+        await runWorkerFile({ type: "file", i: k, total: all.length, name: f.name, rel_path: rel, folder: rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "", y, y48 }, y, y48, rel, i, all.length);
       } catch (e) { console.warn("skipped", rel, e); }
       i++;
     }
@@ -383,10 +419,13 @@
     note(`<b>${root}</b>: ${files.length} files, ${r.payload.levels.l1.n} clips, analysed in ${((performance.now() - t0) / 1000).toFixed(0)} s in this browser — nothing was uploaded.` +
          ` In Live, set DMC Corpus's <b>root</b> to this same folder.` + (unplayable ? ` ${unplayable} ogg/opus file(s) will analyse here but Live cannot load them.` : ""), true);
   }
-  function runWorkerFile(msg, y) {
+  function runWorkerFile(msg, y, y48, rel, i, n) {
     return new Promise((res, rej) => { const w = engine();
-      w.onmessage = (ev) => { const m = ev.data; if (m.type === "progress" && m.stage === "features") res(); else if (m.type === "error") rej(new Error(m.error)); };
-      w.postMessage(msg, [y.buffer]); });
+      w.onmessage = (ev) => { const m = ev.data;
+        if (m.type === "progress" && m.stage === "features") res();
+        else if (m.type === "progress" && m.stage === "clap") note(`CLAP · file <b>${i + 1}/${n}</b> ${rel} · clip ${m.done}/${m.of}${W.clapThreads ? ` · ${W.clapThreads} thread${W.clapThreads > 1 ? "s" : ""}` : ""}`);
+        else if (m.type === "error") rej(new Error(m.error)); };
+      w.postMessage(msg, y48 ? [y.buffer, y48.buffer] : [y.buffer]); });
   }
   async function recompute(m) {                                   // the config panel's Apply, on your corpus
     lastConfig = { phase2: m.phase2, readings: m.readings };
