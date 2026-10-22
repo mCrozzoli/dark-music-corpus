@@ -82,7 +82,7 @@ cluster: a different instrument or effect for each region of the map.
 | source | The key (symbol families listed first). |
 | **Zones** | *spread* matches Live's **Distribute Ranges Equally**; *index* uses chain number = cluster. |
 | wrap · hold | *wrap* folds extra clusters onto the chains; *hold* freezes the current chain. |
-| **noise** | Points between clusters (HDBSCAN noise): *hold* keeps the current chain; *last chain* gives them their own chain. |
+| **noise** | Points between clusters (HDBSCAN noise): *hold* keeps the current chain and plays no note; *last chain* gives them the Rack's last chain, and the clusters share the others. |
 | notes (MIDI build) | One note per cluster change (base + cluster), e.g. for Drum Rack pads. |
 
 Set-up: put an Instrument or Audio Effect Rack after it, give it one chain per cluster, then
