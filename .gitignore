@@ -1,0 +1,14 @@
+# audio and video masters stay out of git; only the demo excerpts folder is tracked
+*.wav
+*.aif
+*.aiff
+*.flac
+*.mov
+*.mp4
+!demo/excerpts/**
+# Live and Max scratch
+*.als~
+Backup/
+.DS_Store
+__pycache__/
+node_modules/
