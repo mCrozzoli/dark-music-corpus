@@ -1,0 +1,31 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dark Music Corpus · link test</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;margin:24px;max-width:720px} pre{white-space:pre-wrap;background:#f3f0ea;padding:12px}</style></head>
+<body><h1>Link test: this page ↔ the DMC Hub on this computer</h1>
+<p>Opens <code>ws://127.0.0.1:9002/dmc</code>, sends hello, a 300-key schema batch, and tries a second connection. Nothing here makes Live play.</p>
+<button id="go">run</button><pre id="log"></pre>
+<script>
+const out = []; const log = (s) => { out.push(s); document.getElementById("log").textContent = out.join("\n"); };
+window.WS_TEST = async (url = "ws://127.0.0.1:9002/dmc") => {
+  const R = { url, origin: location.origin, isSecureContext };
+  const open = (u) => new Promise((res) => { let ws; try { ws = new WebSocket(u); } catch (e) { return res({ error: String(e) }); }
+    const t = setTimeout(() => res({ ws, timeout: true }), 4000);
+    ws.onopen = () => { clearTimeout(t); res({ ws }); }; ws.onerror = () => { clearTimeout(t); res({ ws, error: "error event" }); };
+    ws.onclose = (e) => { clearTimeout(t); res({ ws, closed: e.code }); }; });
+  const a = await open(url); R.open = a.error || a.timeout || a.closed ? { error: a.error, timeout: a.timeout, closed: a.closed } : "open"; log("open: " + JSON.stringify(R.open));
+  if (R.open !== "open") return R;
+  const ws = a.ws, got = []; ws.onmessage = (m) => { try { got.push(JSON.parse(m.data)); } catch (_) { got.push(m.data); } };
+  await new Promise((r) => setTimeout(r, 300));
+  R.on_connect = got.slice();
+  const t0 = performance.now(); ws.send(JSON.stringify({ a: "/dmc/hello", args: ["webtest", "web-0.1"] }));
+  while (!got.some((m) => m && m.a === "/dmc/ack") && performance.now() - t0 < 3000) await new Promise((r) => setTimeout(r, 2));
+  R.ack_ms = got.some((m) => m && m.a === "/dmc/ack") ? +(performance.now() - t0).toFixed(1) : null; log("hello→ack ms: " + R.ack_ms);
+  const b = [{ a: "/dmc/schema/begin", args: ["webtest", 300] }];
+  for (let i = 0; i < 300; i++) { b.push({ a: "/dmc/schema/key", args: [`k${i}`, "signal", 0.0, 1.0, 0.5, 0.1, 0, -1, "S1"] }); }
+  b.push({ a: "/dmc/schema/end", args: ["webtest"] }); ws.send(JSON.stringify({ b })); R.batch_sent = b.length; log("batch sent: " + b.length);
+  const c = await open(url); R.second = { closed: c.closed, error: c.error, timeout: c.timeout }; log("second connection: " + JSON.stringify(R.second));
+  await new Promise((r) => setTimeout(r, 300)); R.messages = got.map((m) => m && m.a).filter(Boolean);
+  ws.close(1000); log("done"); return R;
+};
+document.getElementById("go").onclick = () => WS_TEST();
+</script></body></html>
