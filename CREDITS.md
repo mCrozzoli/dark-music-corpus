@@ -105,7 +105,7 @@ preprocessing, data processing, mapping utilities) and its web style kit (`darks
 ## Software: Max for Live devices and Live sets
 
 - **Max 8 / Max for Live** by Cycling '74 (Ableton): the device environment, including Node for
-  Max if the WebSocket link is added.
+  Max, which runs the Hub's web link and OSC input.
 - **`Abl.Map` and `Abl.MapUi`** by Ableton: the parameter-mapping abstractions embedded in DMC Map
   and DMC Event. They are © Ableton, redistributed only inside the frozen devices, as is usual for
   Max for Live devices.
