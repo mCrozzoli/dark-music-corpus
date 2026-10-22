@@ -30,9 +30,10 @@
   const W = (window.DMC_WEB = { ready: null, data: null, link: null, audio: null, mode: "demo" });
   // cross-origin isolation (CLAP on several threads): register coi-sw.js once and reload once; never loop
   if (!self.crossOriginIsolated && "serviceWorker" in navigator && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname) || (!self.crossOriginIsolated && new URLSearchParams(location.search).get("coi") === "1")) {
-    navigator.serviceWorker.register(url("coi-sw.js")).then((reg) => {
+    // reload only once the worker is ACTIVE (a reload right after register() lands on an uncontrolled page)
+    navigator.serviceWorker.register(url("coi-sw.js")).then(() => navigator.serviceWorker.ready).then(() => {
       let tried = false; try { tried = sessionStorage.getItem("dmc.coi") === "1"; } catch (_) {}
-      if (!tried && !navigator.serviceWorker.controller) { try { sessionStorage.setItem("dmc.coi", "1"); } catch (_) {} location.reload(); }
+      if (!tried) { try { sessionStorage.setItem("dmc.coi", "1"); } catch (_) {} location.reload(); }
     }).catch(() => {});
   }
   W.ready = (async () => {
