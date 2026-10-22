@@ -22,4 +22,4 @@ In collaboration with Christian Høgh (Rhythmic Music Conservatory, Copenhagen).
 - **Code, devices and template**: MIT (see `LICENSE`).
 - **Audio** (the demo corpus excerpts from the record *Sounding Numbers*, Kairos KAI0022047, and the demo piece):
   all rights reserved, for listening only. Not covered by the MIT licence.
-- Third-party software and models keep their own licences; full credits in `CREDITS.md` (coming).
+- Third-party software and models keep their own licences; full credits in [`CREDITS.md`](CREDITS.md).
