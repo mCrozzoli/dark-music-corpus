@@ -11,9 +11,10 @@
 // (core/clap.js); the readings — scalers + clip, weights, balance, pre-PCA; maps UMAP / PCA / t-SNE (Barnes-Hut, after
 // sklearn) / SOM (after MiniSom); clusterings k-means / GMM / agglomerative / spectral / HDBSCAN / DBSCAN (k auto by
 // silhouette or BIC, noise as the last class); Isolation Forest / LOF; kNN; 2-D density; the per-stage cache; the
-// readings comparison; and every key family of keys.py (core/keys.js). Not here: the desktop's file-level cache
-// across sessions (this page keeps one corpus in memory) and the segmentation modes other than fixed.
-import { SR, HOP, frameFeatures, summarize, summarizeWhole, rhythm, beatTrack } from "./mir.js";
+// readings comparison; and every key family of keys.py (core/keys.js); Phase 2 per its config (rate, normalize, the four
+// segmentation modes, snap, groups and their options, chroma stft / cqt / cens). Not here: the desktop's on-disk cache
+// across sessions (this page keeps one corpus in memory) and CLAP models other than larger_clap_music_and_speech.
+import { makeMir, fixedSegments, regularize, toNativeSamples, normalizeAudio, roundEven, resample } from "./mir.js";
 import { UMAP, Matrix, EigenvalueDecomposition, SingularValueDecomposition } from "../vendor/umap-js.esm.js";
 import * as CLAP from "./clap.js";
 import { computeKeys, familyConfig, baseReadingDescs, S2_ALL } from "./keys.js";
@@ -33,58 +34,64 @@ async function fileId(rel, n) {                                 // a stable 10-h
   const d = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(`${rel}|${n}`));
   return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 10);
 }
-function fixedSegments(dur, size = 2.0, overlap = 0.5, minTail = 0.5) {   // segment.fixed_segments
-  const EPS = 1e-9; if (dur <= size + EPS) return [[0, dur]];
-  const hop = size * (1 - overlap), segs = []; for (let k = 0; k * hop + size <= dur + EPS; k++) segs.push([k * hop, k * hop + size]);
-  const tail = dur - segs[segs.length - 1][1];
-  if (tail > EPS && tail >= minTail && dur - size > segs[segs.length - 1][0] + EPS) segs.push([dur - size, dur]);
-  return segs;
-}
-function snap(x, s, radius) {                                   // segment.snap_to_zero_crossing
-  const n = x.length; if (s <= 0 || s >= n) return Math.min(Math.max(s, 0), n);
-  const lo = Math.max(0, s - radius), hi = Math.min(n - 1, s + radius); let best = s, bd = Infinity;
-  for (let i = lo; i < hi; i++) if ((x[i] <= 0) !== (x[i + 1] <= 0)) { const j = Math.abs(x[i + 1]) < Math.abs(x[i]) ? i + 1 : i; if (Math.abs(j - s) < bd) { bd = Math.abs(j - s); best = j; } }
-  return best;
-}
 const median = (a) => { const s = Float64Array.from(a).sort(), n = s.length; return n % 2 ? s[(n - 1) / 2] : 0.5 * (s[n / 2 - 1] + s[n / 2]); };
 const quantile = (s, q) => { const pos = (s.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos); return s[lo] + (s[hi] - s[lo]) * (pos - lo); };
 const rankPct = (v) => { const idx = Array.from(v, (_, i) => i).sort((a, b) => v[a] - v[b]), r = new Float64Array(v.length); let i = 0;
   while (i < idx.length) { let j = i; while (j + 1 < idx.length && v[idx[j + 1]] === v[idx[i]]) j++; const avg = (i + j) / 2 + 1; for (let k = i; k <= j; k++) r[idx[k]] = avg / v.length; i = j + 1; } return r; };
 
-// ------------------------------------------------------------------ one file
+// ------------------------------------------------------------------ one file (worker.process_file)
+// m: {i, total, name, rel_path, folder, yNat (the native-rate mono mix), srNat, sr (the analysis rate), p2 (the Phase 2 config)}
+// segment.load_audio: the analysis signal is yNat resampled (soxr-HQ-like, see mir.resample) and normalised
+const MIR_GROUPS = ["spectral", "energy", "mfcc", "chroma", "rhythm"];
 async function addFile(m) {
-  const y = m.y, dur = y.length / SR, rel = m.rel_path, fid = await fileId(rel, y.length);
-  const segs = fixedSegments(dur).map(([a, b]) => [snap(y, Math.round(a * SR), Math.round(0.005 * SR)) / SR, snap(y, Math.round(b * SR), Math.round(0.005 * SR)) / SR]);
-  const t0 = segs.map((s) => s[0]), t1 = segs.map((s) => s[1]);
-  const ff = frameFeatures(y), { F, T } = ff;
-  const groupsOf = (name) => name.startsWith("mfcc") ? "mfcc" : name.startsWith("chroma") ? "chroma" : name === "rms" ? "energy" : "spectral";
-  const s = summarize(F, T, t0, t1);                            // cols: <feature>_<stat> …, rms_db, dynamic_range_db
-  const whole = summarizeWhole(F, T);
-  const ranges = t0.map((a, k) => { const A = a * SR, B = t1[k] * SR; let f0 = Math.ceil(A / HOP), f1 = Math.floor((B - 1) / HOP) + 1;
-    const mid = Math.min(Math.max(Math.round((A + B) / 2 / HOP), 0), T - 1); if (f1 <= f0) { f0 = mid; f1 = mid + 1; } else { f0 = Math.min(Math.max(f0, 0), T - 1); f1 = Math.min(Math.max(f1, 1), T); }
-    return [f0, Math.max(f1, f0 + 1), t1[k] - a]; });
-  const rh = rhythm(F.spectral_flux, T, ranges, dur);
-  const peak = t0.map((a, k) => { let p = 0; for (let i = Math.floor(a * SR), e = Math.min(y.length, Math.ceil(t1[k] * SR)); i < e; i++) p = Math.max(p, Math.abs(y[i])); return 20 * Math.log10(Math.max(p, 1e-9)); });
-  let pk = 0; for (const v of y) pk = Math.max(pk, Math.abs(v));
-  const cols = s.cols.concat(["peak_db"], rh.cols), rows = s.rows.map((r, k) => r.concat([peak[k]], rh.rows[k]));
-  const groups = {}; for (const c of cols) { const base = c.replace(/_(mean|std|min|max)$/, "");
-    const g = ["tempo", "onset_rate", "beat_strength"].includes(c) ? "rhythm" : ["rms_db", "dynamic_range_db", "peak_db"].includes(c) ? "energy" : groupsOf(base);
-    (groups[g] = groups[g] || []).push(c); }
-  const fileWhole = whole.concat([20 * Math.log10(Math.max(pk, 1e-9))], rh.whole);
-  if (clapOn && m.y48) {                                          // CLAP per clip at 48 kHz (dmc.clap.embed_file), then the file mean
-    const E = [];
-    for (let k = 0; k < t0.length; k++) {
-      let a = Math.round(t0[k] * CLAP.CLAP_SR), b = Math.round(t1[k] * CLAP.CLAP_SR);
-      if (b - a > CLAP.MAX) { const c = (a + b) >> 1; a = c - CLAP.MAX / 2; b = a + CLAP.MAX; }
-      E.push(await CLAP.embed(m.y48.subarray(Math.max(0, a), Math.min(m.y48.length, b))));
-      if (k % 8 === 7 || k === t0.length - 1) post({ type: "progress", stage: "clap", file: m.i + 1, total: m.total, done: k + 1, of: t0.length, name: m.name });
+  const p2 = m.p2 || {}, an = p2.analysis || {}, sr = m.sr, M = makeMir({ sr, nFft: an.n_fft ?? 2048, hop: an.hop_length ?? 512 }), stats = an.summaries || ["mean", "std", "min", "max"];
+  const yNat = m.yNat, srNat = m.srNat, y = normalizeAudio(resample(yNat, srNat, sr), p2.audio || {}), dur = y.length / sr, c = M.fileCtx(y);
+  const fid = await fileId(m.rel_path, `${yNat.length}|${srNat}`);
+  // segment.segments_for on the analysis signal, then native sample edges snapped to zero crossings
+  const seg = p2.segmentation || { mode: "fixed" }, mode = seg.mode || "fixed"; let segs, note = "";
+  if (mode === "whole") segs = [[0, dur]];
+  else if (mode === "fixed") { const f = seg.fixed || {}; segs = fixedSegments(dur, f.size_s ?? 2.0, f.overlap ?? 0.0, f.min_tail_s ?? 0.5); }
+  else if (mode === "onset") { const o = seg.onset || {};
+    const fr = M.onsetDetect(c.env(), { backtrack: true, delta: o.delta ?? 0.07, wait: Math.max(1, roundEven((o.wait_s ?? 0.03) * sr / M.hop)) });
+    segs = regularize(fr.map((f) => f * M.hop / sr), dur, o.min_len_s ?? 0.25, o.max_len_s ?? 4.0); }
+  else if (mode === "beats") { const b = seg.beats || {}, bt = M.beatTrack(c.env()).beats;
+    if (bt.length < 2) { segs = fixedSegments(dur, b.fallback_size_s ?? 2.0, 0.0, 0.0); note = "no beats found: fixed fallback"; }
+    else { const step = Math.max(1, Math.trunc(b.n_beats ?? 4)); segs = regularize(bt.filter((_, k) => k % step === 0), dur, b.min_len_s ?? 0.25, b.max_len_s ?? 8.0); } }
+  else throw new Error(`segmentation.mode must be whole|fixed|onset|beats, got ${mode}`);
+  const { starts, ends } = toNativeSamples(segs, yNat, srNat, seg.snap || {});
+  const t0 = starts.map((a) => a / srNat), t1 = ends.map((b) => b / srNat), durs = t0.map((a, k) => t1[k] - a);
+  // the MIR groups (features.compute_group), in the desktop's order; peak_db on the native mix (worker.process_file)
+  const feat = p2.features || {}, cols = [], rows = t0.map(() => []), whole = [], groups = {}, on = (g) => (feat[g] || {}).enabled !== false;
+  let events = { onset_t: [], onset_s: [], beat_t: [] };
+  for (const g of MIR_GROUPS) {
+    if (!on(g)) continue; checkCancel();
+    const gcfg = feat[g] || {}; let part;
+    if (g === "rhythm") { const env = c.env(); part = M.rhythm(env, M.ranges(t0, t1, env.length), durs, dur, gcfg.tempogram_win_s ?? 8.0);
+      events = { onset_t: part.onset_t, onset_s: part.onset_s, beat_t: M.beatTrack(env).beats }; }   // features.rhythm_events (E4)
+    else {
+      const fr = M.group(g, c, gcfg), R = M.ranges(t0, t1, fr.frames[0].length); part = M.summarize(fr, R, stats);
+      if (g === "energy") { const ex = M.energyExtras(fr.frames[0], R); part.cols.push(...ex.cols); part.rows.forEach((r, k) => r.push(...ex.rows[k])); part.whole.push(...ex.whole);
+        const db = (v) => 20 * Math.log10(Math.max(v, 1e-6)); let pAll = 0;
+        starts.forEach((a, k) => { let p = 0; for (let q = a; q < ends[k]; q++) p = Math.max(p, Math.abs(yNat[q])); part.rows[k].push(db(p)); });
+        for (let q = 0; q < yNat.length; q++) pAll = Math.max(pAll, Math.abs(yNat[q]));
+        part.cols.push("peak_db"); part.whole.push(db(pAll)); }
+    }
+    cols.push(...part.cols); part.rows.forEach((r, k) => rows[k].push(...r)); whole.push(...part.whole); groups[g] = part.cols.slice();
+  }
+  if (clapOn && on("clap")) { const y48 = resample(yNat, srNat, CLAP.CLAP_SR);                            // clap.embed_file: per clip (≤ max_clip_s, centred), 48 kHz, then the L2 file mean
+    const E = [], maxLen = Math.trunc(((feat.clap || {}).max_clip_s ?? 10.0) * srNat), f48 = CLAP.CLAP_SR / srNat;
+    for (let k = 0; k < starts.length; k++) {
+      let a = starts[k], b = ends[k]; if (b - a > maxLen) { const cc = Math.floor((a + b) / 2); a = cc - Math.floor(maxLen / 2); b = a + maxLen; }
+      const a48 = Math.max(0, Math.round(a * f48)), b48 = Math.min(y48.length, Math.ceil(b * f48));
+      E.push(await CLAP.embed(y48.subarray(a48, b48)));
+      if (k % 8 === 7 || k === starts.length - 1) post({ type: "progress", stage: "clap", file: m.i + 1, total: m.total, done: k + 1, of: starts.length, name: m.name });
+      if (k % 8 === 7) checkCancel();
     }
     const cc = Array.from({ length: E[0].length }, (_, j) => `clap_${j}`);
     rows.forEach((r, k) => { for (const v of E[k]) r.push(v); }); cols.push(...cc); groups.clap = cc;
-    for (const v of CLAP.l2mean(E)) fileWhole.push(v);
+    for (const v of CLAP.l2mean(E)) whole.push(v);
   }
-  files[m.i] = { name: m.name, rel_path: rel, folder: m.folder || "", file_id: fid, duration: dur, t0, t1, cols, rows, groups,
-                 whole: fileWhole, events: { onset_t: rh.onset_t, onset_s: rh.onset_s, beat_t: beatTrack(F.spectral_flux).beats } };   // features.file_events
+  files[m.i] = { name: m.name, rel_path: m.rel_path, folder: m.folder || "", file_id: fid, duration: yNat.length / srNat, t0, t1, cols, rows, groups, whole, events, note };
 }
 
 // ------------------------------------------------------------------ readings (readings.py)
@@ -681,7 +688,9 @@ async function finish(cfg, opts = {}) {
   for (const lv of ["l1", "l0"]) for (const r of Object.values(levels[lv].readings)) for (const f of ["x", "y", "os", "d"]) r[f] = r[f].map((v) => round(v));
   const meta = (k) => ({ name: k.name, kind: k.kind, family: k.family, desc: k.desc, n_classes: k.n_classes, noise_class: k.noise_class === -1 ? null : k.noise_class, labels: k.labels || null, min: k.min, max: k.max });
   const version = String(Date.now());
-  const warnings = K.warnings.slice(); if (!groups.clap) warnings.push("computed in your browser without CLAP: the CLAP readings and text tags need the CLAP step (◫ your corpus → + CLAP)");
+  const warnings = K.warnings.slice(), clapModel = (((cfg.phase2 || {}).features || {}).clap || {}).model;
+  if (groups.clap && clapModel && clapModel !== "laion/larger_clap_music_and_speech") warnings.push(`CLAP: ${clapModel} is not in this page — the embeddings are laion/larger_clap_music_and_speech`);
+  if (!groups.clap) warnings.push("computed in your browser without CLAP: the CLAP readings and text tags need the CLAP step (◫ your corpus → + CLAP)");
   const payload = { version, label: "your corpus", corpus: "your corpus", corpus_name: cfg.corpus_name || "your_corpus", readings: specs.map((s) => s.name),
     live: s2, keys: { live: liveStats.map(meta), readings: Object.fromEntries(Object.entries(rkeys).map(([n, ks]) => [n, ks.map(meta)])), warnings },
     tracks: F.map((f) => ({ file_id: f.file_id, name: f.name.replace(/\.[^.]+$/, ""), rel_path: f.rel_path, duration: +f.duration.toFixed(2) })),
@@ -701,7 +710,8 @@ async function finish(cfg, opts = {}) {
 self.onmessage = async (ev) => {
   const m = ev.data;
   try {
-    if (m.type === "file") { await addFile(m); post({ type: "progress", stage: "features", done: m.i + 1, total: m.total, name: m.name }); }
+    if (m.type === "file") { cancelFlag = m.cancel || null; await addFile(m); post({ type: "progress", stage: "features", done: m.i + 1, total: m.total, name: m.name }); }
+    else if (m.type === "dump") post({ type: "dump", files: files.filter(Boolean).map((f) => ({ name: f.name, rel_path: f.rel_path, t0: f.t0, t1: f.t1, cols: f.cols, rows: f.rows, whole: f.whole, groups: f.groups, events: f.events, note: f.note })) });   // the Phase 2 table, for tests
     else if (m.type === "reset") { files.length = 0; clapOn = false; CACHE.clear(); }
     else if (m.type === "text") {                                 // the text probe (bridge.compute_probe "text" + keys.text_embeddings' collapse check)
       await CLAP.loadText(m.parts, m.vocab, m.merges, m.ort, m.wasm, (got, total) => post({ type: "progress", stage: "text_model", got, total }));

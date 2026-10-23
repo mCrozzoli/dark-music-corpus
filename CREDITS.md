@@ -80,6 +80,7 @@ This file goes into the public `dark-music-corpus` repo and the site's about pag
 | joblib | 1.5.2 | BSD-3-Clause |
 | threadpoolctl | 3.6.0 | BSD-3-Clause |
 | soundfile (libsndfile) | 0.13.1 | BSD-3-Clause (libsndfile: LGPL-2.1) |
+| soxr (python-soxr, libsoxr) — librosa's resampler | 1.0.0 | LGPL-2.1 |
 | PyTorch | 2.14.1 | BSD-style (see its notices) |
 | Hugging Face Transformers | 5.20.2 | Apache-2.0 |
 | NetworkX | 3.5 | BSD-3-Clause |
@@ -107,7 +108,10 @@ preprocessing, data processing, mapping utilities) and its web style kit (`darks
   after scikit-learn's TSNE) and SOM (after MiniSom's training rule) maps; k-means, GMM, agglomerative (after SciPy's
   linkage and scikit-learn's tree cut), spectral, HDBSCAN and DBSCAN clustering, Isolation Forest and LOF (after
   scikit-learn); kNN; the readings comparison; and every key family, with Louvain communities and betweenness after
-  NetworkX 3.5 (including CPython's Mersenne Twister, so the seeded results match). No library code is copied.
+  NetworkX 3.5 (including CPython's Mersenne Twister, so the seeded results match); Phase 2 per its config, with
+  librosa's constant-Q chroma (cqt / cens); WAV / AIFF decoding by libsndfile's conventions; resampling to the published
+  specification of libsoxr's "HQ" setting (the resampler librosa uses), as a Kaiser-windowed sinc filter written for this
+  page. No library code is copied.
 - **ONNX Runtime Web** 1.30.0 by Microsoft (MIT): runs the CLAP audio encoder in the browser (WASM).
 - **CLAP audio and text encoders** of `laion/larger_clap_music_and_speech` (Apache-2.0, LAION; Wu et al., ICASSP 2023),
   exported to ONNX (opset 17) and quantised to 8-bit weights for the page (`models/clap/`, notice in

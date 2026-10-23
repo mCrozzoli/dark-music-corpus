@@ -392,6 +392,8 @@
     if (!worker) worker = new Worker(url("core/engine.js"), { type: "module" });
     return worker;
   }
+  W.engine = engine;                                              // for tests (the Phase 2 table: {type: "dump"})
+  W.decodeNative = (buf) => decodeNative(buf);                    // for tests (decode parity with libsndfile)
   function note(html, done) {
     let el = document.getElementById("web-progress");
     if (!el) { el = document.createElement("div"); el.id = "web-progress";
@@ -433,6 +435,14 @@
     const t0 = performance.now();
     if (!why) page.push({ type: "job", state: "start" });
     try {
+      const ev = (e) => !why && page.push({ type: "event", phase: "phase2", ev: e });
+      if (p2Key(config.phase2) !== OWN.p2Done) {                   // dmc.engine.run: the corpus or its Phase 2 config changed
+        OWN.p2Done = null; const tp = performance.now(); ev({ type: "stage_start", stage: "features" });
+        await runPhase2(config.phase2 || {}, OWN.withClap, (what, m) => {
+          if (what === "file") ev({ type: "progress", stage: "features", done: m.i, total: m.total, rate: m.rate, eta_s: m.rate ? (m.total - m.i) / m.rate : null });
+          else if (what === "clap") ev({ type: "progress", stage: "clap", done: m.fileIndex, total: m.n }); });
+        ev({ type: "stage_end", stage: "features" }); job.p2s = +((performance.now() - tp) / 1000).toFixed(1);
+      } else ev({ skipped: true });
       const r = await runWorker({ type: "finish", cancel: CANCEL, config: Object.assign({}, config, { corpus_name: W.data.corpus_name }) }, (p) => {
         const ev = readingsEvent(p); if (ev && !why) page.push({ type: "event", phase: "readings", ev }); });
       if (job.discarded) return;
@@ -440,7 +450,7 @@
       if (why) return swapTo(state, why);
       W.prev = W.cur; W.cur = state; adopt(r); lastConfig = state.config;
       const s = +((performance.now() - t0) / 1000).toFixed(1);
-      page.push({ type: "job", state: "done", version: r.payload.version, timings: { total: s, phase2: null, readings: s } });
+      page.push({ type: "job", state: "done", version: r.payload.version, timings: { total: s, phase2: job.p2s ?? null, readings: +(s - (job.p2s || 0)).toFixed(1) } });
     } catch (e) { if (!job.discarded) page.push(e.cancelled ? { type: "job", state: "cancelled" } : { type: "job", state: "error", error: String(e.message || e) }); }
     finally { job = null; }
   }
@@ -457,11 +467,113 @@
     W.audio.mode = "own";
     if (page) { page.markers = LS.get(`markers.${r.payload.corpus_name}`, {}); page.probes = {}; if (page.link && page.link.enabled) page.link.announce(); }
   }
+  // Phase 2 in the browser (dmc.engine.run): decode, the native mono mix (librosa's mean of the channels), the analysis rate,
+  // then the worker segments and extracts per the config. Re-run only when the Phase 2 config changed (as the desktop does).
+  const P2_PROCESS = ["workers", "threads_per_worker", "max_tasks_per_child"], CLAP_PROCESS = ["device", "batch_size", "backend", "allow_download", "checkpoint"];
+  const sortKeys = (v) => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])])) : v;
+  const p2Key = (p2) => { const c = JSON.parse(JSON.stringify(p2 || {})); for (const k of P2_PROCESS) delete c[k];
+    if (c.features && c.features.clap) for (const k of CLAP_PROCESS) delete c.features.clap[k]; return JSON.stringify(sortKeys(c)); };
+  // the file's own sample rate, from its header: decodeAudioData resamples to its context's rate, so decoding in a context
+  // at the native rate gives the native signal (as librosa.load(sr=None)). WAV / RF64, AIFF / AIFC, FLAC, MP3, Ogg (Vorbis, Opus).
+  function nativeRate(buf) {
+    const b = new Uint8Array(buf), dv = new DataView(buf), tag = (o, n = 4) => String.fromCharCode(...b.subarray(o, o + n));
+    try {
+      if ((tag(0) === "RIFF" || tag(0) === "RF64") && tag(8) === "WAVE") { for (let o = 12; o + 8 <= b.length;) { const id = tag(o), sz = dv.getUint32(o + 4, true); if (id === "fmt ") return dv.getUint32(o + 12, true); o += 8 + sz + (sz & 1); } }
+      if (tag(0) === "FORM" && (tag(8) === "AIFF" || tag(8) === "AIFC")) { for (let o = 12; o + 8 <= b.length;) { const id = tag(o), sz = dv.getUint32(o + 4); if (id === "COMM") {
+            const e = o + 16, ex = ((b[e] & 0x7f) << 8) | b[e + 1], hi = dv.getUint32(e + 2), lo = dv.getUint32(e + 6); return Math.round((hi * 2 ** 32 + lo) * 2 ** (ex - 16383 - 63)); } o += 8 + sz + (sz & 1); } }
+      if (tag(0) === "fLaC") return (b[18] << 12) | (b[19] << 4) | (b[20] >> 4);
+      if (tag(0) === "OggS") { const i = b.findIndex((x, k) => k > 27 && tag(k, 8) === "OpusHead"); if (i > 0) return 48000;
+        const v = b.findIndex((x, k) => k > 27 && x === 1 && tag(k + 1, 6) === "vorbis"); if (v > 0) return dv.getUint32(v + 12, true); }
+      let o = 0; if (tag(0, 3) === "ID3") o = 10 + ((b[6] & 0x7f) << 21 | (b[7] & 0x7f) << 14 | (b[8] & 0x7f) << 7 | (b[9] & 0x7f));
+      for (; o + 4 < b.length; o++) if (b[o] === 0xff && (b[o + 1] & 0xe0) === 0xe0) { const ver = (b[o + 1] >> 3) & 3, si = (b[o + 2] >> 2) & 3; if (ver === 1 || si === 3) continue;
+          return [[11025, 12000, 8000], null, [22050, 24000, 16000], [44100, 48000, 32000]][ver][si]; }
+    } catch (e) { /* unknown header */ }
+    return null;
+  }
+  // WAV / AIFF PCM decoded here, as libsndfile does for librosa.load (ints ÷ 2^(bits−1) in float32, floats as stored):
+  // exact, where the browser's decoder adds a small gain and conversion noise (TESTS §9). Other formats: the browser's decoder.
+  function decodePcm(buf) {
+    const b = new Uint8Array(buf), dv = new DataView(buf), tag = (o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+    let fmt = null, data = null, le = true;
+    if ((tag(0) === "RIFF" || tag(0) === "RF64") && tag(8) === "WAVE") {
+      let ds64 = null;
+      for (let o = 12; o + 8 <= b.length;) { const id = tag(o); let sz = dv.getUint32(o + 4, true);
+        if (id === "ds64") ds64 = Number(dv.getBigUint64(o + 16, true));
+        if (id === "fmt ") { let code = dv.getUint16(o + 8, true); const ch = dv.getUint16(o + 10, true), sr = dv.getUint32(o + 12, true), bits = dv.getUint16(o + 22, true);
+          if (code === 0xfffe && sz >= 40) code = dv.getUint16(o + 32, true);                           // WAVE_FORMAT_EXTENSIBLE: the sub-format GUID
+          fmt = { float: code === 3, pcm: code === 1, ch, sr, bits }; }
+        if (id === "data") { if (sz === 0xffffffff && ds64 != null) sz = ds64; data = [o + 8, Math.min(sz, b.length - o - 8)]; break; }
+        o += 8 + sz + (sz & 1); }
+    } else if (tag(0) === "FORM" && (tag(8) === "AIFF" || tag(8) === "AIFC")) {
+      le = false;
+      for (let o = 12; o + 8 <= b.length;) { const id = tag(o), sz = dv.getUint32(o + 4);
+        if (id === "COMM") { const ch = dv.getUint16(o + 8), bits = dv.getUint16(o + 14), e = o + 16, ex = ((b[e] & 0x7f) << 8) | b[e + 1];
+          const sr = Math.round((dv.getUint32(e + 2) * 2 ** 32 + dv.getUint32(e + 6)) * 2 ** (ex - 16383 - 63)), comp = tag(8) === "AIFC" ? tag(o + 26) : "NONE";
+          if (comp === "sowt") le = true; fmt = { float: comp === "fl32" || comp === "FL32" || comp === "fl64" || comp === "FL64", pcm: comp === "NONE" || comp === "sowt", ch, sr, bits: comp.startsWith("fl") || comp.startsWith("FL") ? (comp.endsWith("64") ? 64 : 32) : bits }; }
+        if (id === "SSND") { const off = dv.getUint32(o + 8); data = [o + 16 + off, Math.min(sz - 8 - off, b.length - o - 16 - off)]; }
+        o += 8 + sz + (sz & 1); }
+      if (fmt && fmt.pcm && fmt.bits === 8) fmt.signed8 = true;                                      // AIFF 8-bit is signed
+    }
+    if (!fmt || !data || !(fmt.pcm || fmt.float)) return null;
+    const { ch, bits } = fmt, bps = Math.ceil(bits / 8), n = Math.floor(data[1] / (bps * ch)), y = Array.from({ length: ch }, () => new Float32Array(n));
+    for (let i = 0, o = data[0]; i < n; i++) for (let c = 0; c < ch; c++, o += bps) {
+      let v;
+      if (fmt.float) v = bits === 64 ? dv.getFloat64(o, le) : dv.getFloat32(o, le);
+      else if (bps === 1) v = fmt.signed8 ? dv.getInt8(o) / 128 : (b[o] - 128) / 128;
+      else if (bps === 2) v = dv.getInt16(o, le) / 32768;
+      else if (bps === 3) { const x = le ? (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16)) : ((b[o] << 16) | (b[o + 1] << 8) | b[o + 2]); v = ((x << 8) >> 8) / 8388608; }
+      else v = dv.getInt32(o, le) / 2147483648;
+      y[c][i] = v;
+    }
+    return { sampleRate: fmt.sr, numberOfChannels: ch, length: n, getChannelData: (c) => y[c] };
+  }
+  async function decodeNative(buf) {
+    const pcm = decodePcm(buf); if (pcm) return pcm;
+    const b = new Uint8Array(buf), flacBits = String.fromCharCode(b[0], b[1], b[2], b[3]) === "fLaC" ? (((b[20] & 1) << 4) | (b[21] >> 4)) + 1 : 0;
+    const sr = nativeRate(buf), ctx = sr ? new OfflineAudioContext(1, 1, sr) : new AudioContext();
+    let dec; try { dec = await ctx.decodeAudioData(buf.slice(0)); } finally { if (ctx.close) ctx.close(); }
+    if (flacBits === 16) {                                          // Chromium scales 16-bit FLAC by 1/32767 above zero (1/32768 below): back to k / 32768 (libsndfile)
+      const chs = Array.from({ length: dec.numberOfChannels }, (_, c) => dec.getChannelData(c));
+      const asym = chs.some((x) => { for (let i = 0; i < x.length; i += 97) if (x[i] > 0 && x[i] * 32768 !== Math.round(x[i] * 32768)) return true; return false; });
+      if (asym) return { sampleRate: dec.sampleRate, numberOfChannels: chs.length, length: dec.length,
+        getChannelData: (c) => Float32Array.from(chs[c], (v) => Math.round(v * (v > 0 ? 32767 : 32768)) / 32768) };
+    }
+    return dec;
+  }
+
+  async function runPhase2(p2, withClap, report) {                // → the files the worker accepted
+    const w = engine(), files = [], all = OWN.all, useClap = withClap && ((p2.features || {}).clap || {}).enabled !== false;
+    w.postMessage({ type: "reset" });
+    if (useClap) await new Promise((res, rej) => { w.onmessage = (ev) => { const m = ev.data;
+        if (m.type === "progress" && m.stage === "clap_model") report("clap_model", m); else if (m.type === "clap_ready") { W.clapThreads = m.threads; res(); } else if (m.type === "error") rej(new Error(m.error)); };
+      w.postMessage({ type: "clap", model: url("models/clap/audio_model_int8.onnx"), ort: url("vendor/ort/ort.wasm.min.mjs"), wasm: url("vendor/ort/") }); });
+    const t0 = performance.now(); let i = 0;
+    for (const f of all) {
+      if (CANCEL && Atomics.load(CANCEL, 0) || (job && job.discarded)) throw Object.assign(new Error("cancelled"), { cancelled: true });
+      const rel = (f.webkitRelativePath || f.name).split("/").slice(1).join("/") || f.name;
+      report("file", { i, total: all.length, rel, rate: i / Math.max((performance.now() - t0) / 1000, 1e-9) });
+      try {
+        const dec = await decodeNative(await f.arrayBuffer()), srNat = dec.sampleRate, nc = dec.numberOfChannels, yNat = Float32Array.from(dec.getChannelData(0));
+        for (let c = 1; c < nc; c++) { const ch = dec.getChannelData(c); for (let k = 0; k < yNat.length; k++) yNat[k] += ch[k]; }     // np.mean(axis=0) in float32: sum, then ÷ n
+        if (nc > 1) for (let k = 0; k < yNat.length; k++) yNat[k] /= nc;
+        if (!yNat.length) throw new Error("decoded 0 samples");
+        const sr = +((p2.audio || {}).sr || srNat), k = files.length; files.push(f);
+        await runWorkerFile({ type: "file", i: k, total: all.length, name: f.name, rel_path: rel, folder: rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "",
+                              sr, yNat, srNat, p2, cancel: CANCEL }, (m) => report("clap", Object.assign({ fileIndex: i, n: all.length, rel }, m)));
+      } catch (e) { if (e && e.cancelled) throw e; if (String(e && e.message || e).includes("__cancelled__")) throw Object.assign(new Error("cancelled"), { cancelled: true });
+        if (String(e && e.message || e).includes("not available in the browser")) throw e; console.warn("skipped", rel, e); }
+      i++;
+    }
+    OWN.p2Done = p2Key(p2); OWN.clapDone = useClap;
+    return files;
+  }
   async function analyseFolder(list) {
-    const all = Array.from(list).filter((f) => AUDIO_EXT.test(f.name)).sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
-    const csv = Array.from(list).find((f) => { const p = (f.webkitRelativePath || f.name).split("/"); return p.length <= 2 && p[p.length - 1] === "labels.csv"; });
+    const p2 = (lastConfig || W.data.config || {}).phase2 || {}, ext = (((p2.scan || {}).extensions) || [".wav", ".aif", ".aiff", ".flac", ".mp3"]).map((e) => e.toLowerCase());
+    const relOf = (f) => f.webkitRelativePath || f.name, cp = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+    const all = Array.from(list).filter((f) => ext.some((e) => f.name.toLowerCase().endsWith(e))).sort((a, b) => cp(relOf(a), relOf(b)));
+    const csv = Array.from(list).find((f) => { const p = relOf(f).split("/"); return p.length <= 2 && p[p.length - 1] === "labels.csv"; });
     OWN.labelsCsv = csv ? await csv.text() : null;                 // keys Y5: a labels.csv at the corpus root (as data/corpora/<corpus>/labels.csv on the desktop)
-    if (!all.length) { note("no audio files in that folder (wav, aif, flac, mp3, m4a, ogg)", true); return; }
+    if (!all.length) { note(`no audio files in that folder (${ext.join(", ")})`, true); return; }
     const root = (all[0].webkitRelativePath || "").split("/")[0] || "your_corpus";
     const mb = all.reduce((s, f) => s + f.size, 0) / 1e6;
     const withClap = await new Promise((res) => {
@@ -470,50 +582,32 @@
            `<div style="margin-top:6px;opacity:.75">CLAP adds an AI audio embedding: two more maps, closer to how sounds are perceived. It downloads a 77 MB model once and takes about ${self.crossOriginIsolated ? "a quarter of a second" : "a second or more"} per clip (one clip per second of audio). Nothing is uploaded either way.</div>`);
       document.getElementById("wc-mir").onclick = () => res(false); document.getElementById("wc-clap").onclick = () => res(true);
     });
-    const t0 = performance.now(), ctx = new AudioContext(), w = engine(), files = [];
-    w.postMessage({ type: "reset" });
-    if (withClap) {
-      await new Promise((res, rej) => { w.onmessage = (ev) => { const m = ev.data;
-          if (m.type === "progress" && m.stage === "clap_model") note(`loading the CLAP model · ${(m.got / 1e6).toFixed(0)}${m.total ? " / " + (m.total / 1e6).toFixed(0) : ""} MB (once; the browser keeps it)`);
-          else if (m.type === "clap_ready") { W.clapThreads = m.threads; res(); } else if (m.type === "error") rej(new Error(m.error)); };
-        w.postMessage({ type: "clap", model: url("models/clap/audio_model_int8.onnx"), ort: url("vendor/ort/ort.wasm.min.mjs"), wasm: url("vendor/ort/") }); });
-    }
-    const unplayable = all.filter((f) => /\.(ogg|opus)$/i.test(f.name)).length;
-    let i = 0;
-    for (const f of all) {
-      const rel = (f.webkitRelativePath || f.name).split("/").slice(1).join("/") || f.name;
-      note(`reading <b>${i + 1}/${all.length}</b> · ${rel}`);
-      try {
-        const dec = await ctx.decodeAudioData(await f.arrayBuffer());
-        const off = new OfflineAudioContext(1, Math.ceil(dec.duration * 22050), 22050), src = off.createBufferSource();
-        src.buffer = dec; src.connect(off.destination); src.start();
-        const y = (await off.startRendering()).getChannelData(0);
-        let y48 = null;
-        if (withClap) { const o48 = new OfflineAudioContext(1, Math.ceil(dec.duration * 48000), 48000), s48 = o48.createBufferSource();
-          s48.buffer = dec; s48.connect(o48.destination); s48.start(); y48 = (await o48.startRendering()).getChannelData(0); }
-        const k = files.length; files.push(f);
-        await runWorkerFile({ type: "file", i: k, total: all.length, name: f.name, rel_path: rel, folder: rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "", y, y48 }, y, y48, rel, i, all.length);
-      } catch (e) { console.warn("skipped", rel, e); }
-      i++;
-    }
-    ctx.close();
+    const t0 = performance.now(); OWN.all = all; OWN.withClap = withClap; if (CANCEL) Atomics.store(CANCEL, 0, 0);
+    const files = await runPhase2(p2, withClap, (what, m) => {
+      if (what === "clap_model") note(`loading the CLAP model · ${(m.got / 1e6).toFixed(0)}${m.total ? " / " + (m.total / 1e6).toFixed(0) : ""} MB (once; the browser keeps it)`);
+      else if (what === "file") note(`reading <b>${m.i + 1}/${m.total}</b> · ${m.rel}`);
+      else if (what === "clap") note(`CLAP · file <b>${m.fileIndex + 1}/${m.n}</b> ${m.rel} · clip ${m.done}/${m.of}${W.clapThreads ? ` · ${W.clapThreads} thread${W.clapThreads > 1 ? "s" : ""}` : ""}`); });
     if (!files.length) { note("none of these files could be decoded by this browser", true); return; }
     note(`analysing <b>${files.length}</b> files: maps, clusters, neighbours…`);
     const cfg = Object.assign({}, lastConfig || W.data.config, { corpus_name: root.replace(/[^A-Za-z0-9_.-]/g, "_") });
     const r = await runWorker({ type: "finish", config: cfg }, (m) => m.stage === "readings" && note(`analysing · ${m.sub || (m.reading + " · " + m.level)} · ${m.done}/${m.total}`));
     adopt(r, files); W.cur = { r, config: { phase2: cfg.phase2, readings: cfg.readings } }; W.prev = null;
     if (page) page.push({ type: "hello", version: r.payload.version });
+    const unplayable = all.filter((f) => /\.(ogg|opus)$/i.test(f.name)).length;
     note(`<b>${root}</b>: ${files.length} files, ${r.payload.levels.l1.n} clips, analysed in ${((performance.now() - t0) / 1000).toFixed(0)} s in this browser — nothing was uploaded.` +
          ` In Live, set DMC Corpus's <b>root</b> to this same folder.` + (unplayable ? ` ${unplayable} ogg/opus file(s) will analyse here but Live cannot load them.` : ""), true);
   }
-  function runWorkerFile(msg, y, y48, rel, i, n) {
+  function runWorkerFile(msg, onClap) {
+    const tr = [msg.yNat.buffer];
     return new Promise((res, rej) => { const w = engine();
       w.onmessage = (ev) => { const m = ev.data;
         if (m.type === "progress" && m.stage === "features") res();
-        else if (m.type === "progress" && m.stage === "clap") note(`CLAP · file <b>${i + 1}/${n}</b> ${rel} · clip ${m.done}/${m.of}${W.clapThreads ? ` · ${W.clapThreads} thread${W.clapThreads > 1 ? "s" : ""}` : ""}`);
+        else if (m.type === "progress" && m.stage === "clap") onClap(m);
+        else if (m.type === "cancelled") rej(Object.assign(new Error("cancelled"), { cancelled: true }));
         else if (m.type === "error") rej(new Error(m.error)); };
-      w.postMessage(msg, y48 ? [y.buffer, y48.buffer] : [y.buffer]); });
+      w.postMessage(msg, tr); });
   }
+
   function recompute(m) { return runJob({ phase2: m.phase2, readings: m.readings }, null); }   // the config panel's Apply, on your corpus
   document.addEventListener("DOMContentLoaded", () => {
     const b = document.getElementById("web-corpus"), inp = document.getElementById("web-corpus-input");
