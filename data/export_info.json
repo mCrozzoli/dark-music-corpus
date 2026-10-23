@@ -1,6 +1,6 @@
 {
- "exported": "2026-10-23 09:50:21",
- "version": "1792741821042",
+ "exported": "2026-10-23 12:36:43",
+ "version": "1792751802197",
  "label": "default",
  "corpus_name": "sounding_numbers",
  "n_clips": 3410,
@@ -8,11 +8,14 @@
  "readings": [
   "mir_umap",
   "clap_umap",
-  "mirclap_umap"
+  "mirclap_umap",
+  "clap_tsne",
+  "spectral_pca",
+  "timbre_som"
  ],
- "payload_bytes_gz": 481636,
- "payload_sha16": "c75c73f701844ac9",
- "link_bytes": 134554,
+ "payload_bytes_gz": 1787128,
+ "payload_sha16": "20086ca79faaed97",
+ "link_bytes": 196557,
  "clap_matrix": {
   "n": 3410,
   "d": 512,

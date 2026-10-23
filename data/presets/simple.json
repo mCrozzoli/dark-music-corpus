@@ -1,0 +1,267 @@
+{
+ "phase2": {
+  "scan": {
+   "extensions": [
+    ".wav",
+    ".aif",
+    ".aiff",
+    ".flac",
+    ".mp3"
+   ],
+   "follow_symlinks": true,
+   "label_from_subfolder": true
+  },
+  "audio": {
+   "sr": 22050,
+   "normalize": "none",
+   "rms_target_db": -20
+  },
+  "segmentation": {
+   "mode": "fixed",
+   "fixed": {
+    "size_s": 2.0,
+    "overlap": 0.5,
+    "min_tail_s": 0.5
+   },
+   "onset": {
+    "min_len_s": 0.25,
+    "max_len_s": 4.0,
+    "delta": 0.07,
+    "wait_s": 0.03
+   },
+   "beats": {
+    "n_beats": 4,
+    "min_len_s": 0.25,
+    "max_len_s": 8.0,
+    "fallback_size_s": 2.0
+   },
+   "snap": {
+    "enabled": true,
+    "radius_ms": 5.0
+   }
+  },
+  "analysis": {
+   "n_fft": 2048,
+   "hop_length": 512,
+   "summaries": [
+    "mean",
+    "std",
+    "min",
+    "max"
+   ]
+  },
+  "features": {
+   "spectral": {
+    "enabled": true,
+    "rolloff_percent": 0.85,
+    "contrast_bands": 6,
+    "collapse_contrast": false
+   },
+   "energy": {
+    "enabled": true
+   },
+   "mfcc": {
+    "enabled": true,
+    "n_mfcc": 13,
+    "collapse": false
+   },
+   "chroma": {
+    "enabled": true,
+    "variant": "stft",
+    "collapse": false
+   },
+   "rhythm": {
+    "enabled": true,
+    "tempogram_win_s": 8.0
+   },
+   "clap": {
+    "enabled": true,
+    "backend": "transformers",
+    "model": "laion/larger_clap_music_and_speech",
+    "checkpoint": null,
+    "allow_download": false,
+    "device": "mps",
+    "batch_size": 16,
+    "max_clip_s": 10.0,
+    "file_level": "mean"
+   }
+  },
+  "workers": -1,
+  "threads_per_worker": 1,
+  "max_tasks_per_child": 200
+ },
+ "readings": {
+  "input": null,
+  "out": null,
+  "cache": null,
+  "levels": [
+   "l1",
+   "l0"
+  ],
+  "seed": 42,
+  "blas_threads": 2,
+  "keys": {
+   "S2": {
+    "enabled": true,
+    "features": [
+     "spectral.centroid",
+     "spectral.flatness",
+     "energy.rms",
+     "energy.rms_db",
+     "rhythm.onset_rate",
+     "rhythm.beat_strength"
+    ]
+   },
+   "Y5": {
+    "enabled": true,
+    "side_patterns": {
+     "Forest": "Forest",
+     "Ocean": "Ocean"
+    },
+    "labels_csv": true
+   },
+   "E1": {
+    "enabled": true
+   },
+   "E3": {
+    "enabled": true
+   }
+  },
+  "compare": {
+   "exclude_s": 4.0,
+   "groupings": {
+    "track": "file_id",
+    "album": {
+     "column": "filename",
+     "patterns": {
+      "Forest": "Forest",
+      "Ocean": "Ocean"
+     }
+    }
+   }
+  },
+  "defaults": {
+   "features": {
+    "groups": [],
+    "stats": [
+     "mean",
+     "std"
+    ],
+    "exclude": [
+     "tempo"
+    ],
+    "include": []
+   },
+   "scaler": {
+    "method": "robust",
+    "clip": 5.0
+   },
+   "balance_groups": false,
+   "weights": {},
+   "pre_pca": null,
+   "dr": {
+    "method": "umap",
+    "n_dims": 2,
+    "n_neighbors": 15,
+    "min_dist": 0.1,
+    "metric": "euclidean",
+    "perplexity": 30,
+    "som_grid": [
+     16,
+     16
+    ],
+    "som_iter": 5000,
+    "n_epochs": null,
+    "approx_nn": true
+   },
+   "cluster": {
+    "method": "kmeans",
+    "k": "auto",
+    "k_range": [
+     3,
+     10
+    ],
+    "space": "feature",
+    "min_cluster_size": 25,
+    "dims": null
+   },
+   "anomaly": {
+    "method": "iforest",
+    "contamination": 0.03
+   },
+   "knn": {
+    "k": 10,
+    "space": "feature"
+   },
+   "density": {
+    "k": 10
+   }
+  },
+  "readings": [
+   {
+    "name": "mir_umap",
+    "features": {
+     "groups": [
+      "spectral",
+      "energy",
+      "mfcc",
+      "chroma",
+      "rhythm"
+     ]
+    },
+    "cluster": {
+     "method": "kmeans",
+     "space": "feature"
+    }
+   },
+   {
+    "name": "clap_umap",
+    "features": {
+     "groups": [
+      "clap"
+     ]
+    },
+    "scaler": {
+     "method": "standard",
+     "clip": null
+    },
+    "pre_pca": 50,
+    "dr": {
+     "method": "umap",
+     "metric": "cosine"
+    },
+    "cluster": {
+     "method": "gmm",
+     "space": "dr",
+     "dims": 10
+    }
+   },
+   {
+    "name": "mirclap_umap",
+    "features": {
+     "groups": [
+      "spectral",
+      "energy",
+      "mfcc",
+      "chroma",
+      "rhythm",
+      "clap"
+     ]
+    },
+    "scaler": {
+     "method": "robust",
+     "clip": 5.0
+    },
+    "balance_groups": true,
+    "weights": {
+     "clap": 2.0
+    },
+    "pre_pca": 30,
+    "cluster": {
+     "method": "spectral",
+     "space": "dr"
+    }
+   }
+  ]
+ }
+}

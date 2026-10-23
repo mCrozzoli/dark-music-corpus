@@ -1,9 +1,9 @@
 {
- "built": "2026-10-23 11:56:34",
+ "built": "2026-10-23 12:36:58",
  "sources": {
   "viz/index.html": "54b37c3939754b5f",
   "web_bridge.js": "507c2f7bed6ae47d",
-  "data/payload.json.gz": "c75c73f701844ac9"
+  "data/payload.json.gz": "20086ca79faaed97"
  },
  "patches": 13,
  "d3": "https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"

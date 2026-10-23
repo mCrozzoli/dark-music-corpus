@@ -213,7 +213,7 @@ export function computeKeys(c) {
     const fm = col("spectral_flux_mean"), fs = col("spectral_flux_std");
     out.push(key("stats.busyness", Float64Array.from(fm, (m2, i) => fs[i] / (Math.abs(m2) + 1e-9)), "signal", "S4", "spectral-flux variation within the clip (std / mean): how busy it is"));
     const M = mir(), blocks = ["spectral", "energy", "mfcc", "chroma"].map((g) => { const set = new Set(c.groups[g] || []); return mirCols.map((x, i) => [x, i]).filter(([x]) => set.has(x) || (g === "energy" && x === "rms_db")).map(([, i]) => i); }).filter((b) => b.length);
-    out.push(key("stats.group_spread", M.map((r) => stdPop(blocks.map((b) => mean(b.map((i) => Math.abs(r[i])))))), "signal", "S4", "std across feature groups of each group's mean |robust z|: one group stands out vs all alike"));
+    if (blocks.length) out.push(key("stats.group_spread", M.map((r) => stdPop(blocks.map((b) => mean(b.map((i) => Math.abs(r[i])))))), "signal", "S4", "std across feature groups of each group's mean |robust z|: one group stands out vs all alike"));
   }
   // novelty (S5, Y7, E5)
   let novelty = null;
@@ -291,7 +291,9 @@ export function computeKeys(c) {
     out.push(key("part.position", Array.from({ length: n }, (_, i) => { const tt = (c.t0[i] + c.t1[i]) / 2 / dur[i]; return tt < a ? 0 : tt > 1 - z ? 2 : 1; }), "symbol", "Y8",
       `opening (first ${pctFmt(a)}) / middle / ending (last ${pctFmt(z)}) of its track`, 3, null, ["opening", "middle", "ending"])); }
   // Y9
-  if (fc("Y9").enabled) { const names = Object.keys(c.results); let pairs = fc("Y9").pairs || []; if (!pairs.length) pairs = names.length >= 2 ? [names.slice(0, 2)] : [];
+  if (fc("Y9").enabled) { const names = Object.keys(c.results), conf = fc("Y9").pairs || [], asked = conf.filter(([a, b]) => c.results[a] && c.results[b]);
+    if (conf.length && !asked.length && names.length >= 2) warnings.push(`Y9: none of the pairs ${JSON.stringify(conf)} are readings of this run; used the first two readings`);
+    const pairs = asked.length ? asked : names.length >= 2 ? [names.slice(0, 2)] : [];
     for (const [a, b] of pairs) { if (!c.results[a] || !c.results[b]) continue; const la = c.results[a].labels, lb = c.results[b].labels, ct = new Map();
       for (let i = 0; i < n; i++) { const m = ct.get(la[i]) || new Map(); m.set(lb[i], (m.get(lb[i]) || 0) + 1); ct.set(la[i], m); }
       const map = new Map(); for (const [x, m] of ct) { let best = null, bv = -1; for (const y of [...m.keys()].sort((p, q) => p - q)) if (m.get(y) > bv) { bv = m.get(y); best = y; } map.set(x, best); }
@@ -301,6 +303,7 @@ export function computeKeys(c) {
     const cc = (c.groups.clap || []).filter(has);
     if (cc.length) { if (!c.text) warnings.push("Y11 skipped: the CLAP text model is not loaded in this page");
       else if (c.text.error) warnings.push(`Y11 skipped: ${c.text.error}`);
+      else if (c.text.T[0].length !== cc.length) warnings.push(`Y11 skipped: the corpus's CLAP embeddings have ${cc.length} dimensions, the text model ${c.text.model} gives ${c.text.T[0].length}`);
       else { const P = c.text.prompts, T = c.text.T, cols = cc.map(col), top = new Int32Array(n), score = new Float64Array(n), S = P.map(() => new Float64Array(n));
         for (let i = 0; i < n; i++) { let nr = 0; for (const v of cols) nr += v[i] * v[i]; nr = Math.sqrt(nr) + 1e-9; let b = -Infinity;
           for (let p = 0; p < P.length; p++) { let s = 0; for (let j = 0; j < cols.length; j++) s += Math.fround(cols[j][i] / nr) * T[p][j]; S[p][i] = s; if (s > b) { b = s; top[i] = p; } } score[i] = b; }
