@@ -80,7 +80,7 @@ This file goes into the public `dark-music-corpus` repo and the site's about pag
 | joblib | 1.5.2 | BSD-3-Clause |
 | threadpoolctl | 3.6.0 | BSD-3-Clause |
 | soundfile (libsndfile) | 0.13.1 | BSD-3-Clause (libsndfile: LGPL-2.1) |
-| soxr (python-soxr, libsoxr) — librosa's resampler | 1.0.0 | LGPL-2.1 |
+| soxr (python-soxr, libsoxr) — librosa's resampler | 1.0.0 | LGPL-2.1-or-later |
 | PyTorch | 2.14.1 | BSD-style (see its notices) |
 | Hugging Face Transformers | 5.20.2 | Apache-2.0 |
 | NetworkX | 3.5 | BSD-3-Clause |
