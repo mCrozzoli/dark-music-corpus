@@ -27,6 +27,7 @@
   const staticJson = (path) => NATIVE_FETCH(url(path)).then((r) => r.json());
 
   // ------------------------------------------------------------------ the dataset (demo for now; own corpus in Phase D)
+  const IS_SAFARI = /^((?!chrome|chromium|crios|fxios|edg|opr|android).)*safari/i.test(navigator.userAgent);
   const W = (window.DMC_WEB = { ready: null, data: null, link: null, audio: null, mode: "demo" });
   // cross-origin isolation (CLAP on several threads): register coi-sw.js once and reload once; never loop
   if (!self.crossOriginIsolated && "serviceWorker" in navigator && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname) || (!self.crossOriginIsolated && new URLSearchParams(location.search).get("coi") === "1")) {
@@ -160,6 +161,7 @@
     }
     open() {
       if (this.ws) return;
+      if (IS_SAFARI) { this.wsState = "safari"; return; }             // Safari blocks ws://127.0.0.1 from an https page (mixed content)
       this.wsState = "connecting";
       let ws; try { ws = new NATIVE_WS(`ws://${this.host}:${this.port}/dmc`); } catch (e) { this.wsState = "refused"; this.ws = null; return; }
       this.ws = ws;
@@ -580,6 +582,23 @@
     OWN.p2Done = p2Key(p2); OWN.clapDone = useClap; OWN.clapModel = useClap ? clapId(p2) : null;
     return files;
   }
+  // the audio's length from each file's header (WAV / AIFF / FLAC exact; other formats by size at ~192 kbit/s), for the time estimate
+  async function audioSeconds(f) {
+    try {
+      const buf = await f.slice(0, 65536).arrayBuffer(), b = new Uint8Array(buf), dv = new DataView(buf), tag = (o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+      if ((tag(0) === "RIFF" || tag(0) === "RF64") && tag(8) === "WAVE") { let ch = 0, sr = 0, bits = 0;
+        for (let o = 12; o + 8 <= b.length;) { const id = tag(o), sz = dv.getUint32(o + 4, true);
+          if (id === "fmt ") { ch = dv.getUint16(o + 10, true); sr = dv.getUint32(o + 12, true); bits = dv.getUint16(o + 22, true); }
+          if (id === "data") { const n = sz === 0xffffffff ? f.size - o - 8 : sz; return sr ? n / (ch * Math.ceil(bits / 8)) / sr : 0; }
+          o += 8 + sz + (sz & 1); } }
+      if (tag(0) === "FORM") for (let o = 12; o + 8 <= b.length;) { const id = tag(o), sz = dv.getUint32(o + 4);
+        if (id === "COMM") { const e = o + 16, ex = ((b[e] & 0x7f) << 8) | b[e + 1], sr = (dv.getUint32(e + 2) * 2 ** 32 + dv.getUint32(e + 6)) * 2 ** (ex - 16383 - 63); return dv.getUint32(o + 10) / sr; }
+        o += 8 + sz + (sz & 1); }
+      if (tag(0) === "fLaC") { const sr = (b[18] << 12) | (b[19] << 4) | (b[20] >> 4), n = (b[21] & 0x0f) * 2 ** 32 + dv.getUint32(22); if (sr && n) return n / sr; }
+    } catch (_) { /* fall through */ }
+    return f.size * 8 / 192000;
+  }
+  const fmtMin = (s) => s < 90 ? `${Math.max(1, Math.round(s / 10) * 10)} s` : `${Math.round(s / 60)} min`;
   async function analyseFolder(list) {
     const p2 = (lastConfig || W.data.config || {}).phase2 || {}, ext = (((p2.scan || {}).extensions) || [".wav", ".aif", ".aiff", ".flac", ".mp3"]).map((e) => e.toLowerCase());
     const relOf = (f) => f.webkitRelativePath || f.name, cp = (a, b) => a < b ? -1 : a > b ? 1 : 0;
@@ -589,10 +608,15 @@
     if (!all.length) { note(`no audio files in that folder (${ext.join(", ")})`, true); return; }
     const root = (all[0].webkitRelativePath || "").split("/")[0] || "your_corpus";
     const mb = all.reduce((s, f) => s + f.size, 0) / 1e6;
+    note(`<b>${root}</b> · ${all.length} files (${mb.toFixed(0)} MB) · reading their length…`);
+    let secs = 0; for (const f of all) secs += await audioSeconds(f);
+    // measured on the full record (52 min of audio, a 2023 laptop): sound features + readings ≈ 0.05 s per second of audio;
+    // CLAP ≈ 0.22 s per second of audio with threads (isolated page), about 3× that without (Safari)
+    const tMir = 20 + secs * 0.05, tClap = tMir + secs * 0.22 * (self.crossOriginIsolated ? 1 : 3);
     const withClap = await new Promise((res) => {
-      note(`<b>${root}</b> · ${all.length} files (${mb.toFixed(0)} MB). Analyse with:<div style="display:flex;gap:8px;margin-top:8px">` +
-           `<button class="wbtn" id="wc-mir">sound features</button><button class="wbtn" id="wc-clap">sound features + CLAP</button></div>` +
-           `<div style="margin-top:6px;opacity:.75">CLAP adds an AI audio embedding: two more maps, closer to how sounds are perceived. It downloads a 77 MB model once and takes about ${self.crossOriginIsolated ? "a quarter of a second" : "a second or more"} per clip (one clip per second of audio). Nothing is uploaded either way.</div>`);
+      note(`<b>${root}</b> · ${all.length} files, ${fmtMin(secs).replace(" s", " s of audio").replace(" min", " min of audio")} (${mb.toFixed(0)} MB). Analyse with:<div style="display:flex;gap:8px;margin-top:8px">` +
+           `<button class="wbtn" id="wc-mir">sound features · ≈ ${fmtMin(tMir)}</button><button class="wbtn" id="wc-clap">sound features + CLAP · ≈ ${fmtMin(tClap)}</button></div>` +
+           `<div style="margin-top:6px;opacity:.75">Times are estimates for a recent laptop (a slower one can take twice as long); keep this tab open and in front while it runs. CLAP adds an AI audio embedding: more maps, closer to how sounds are perceived, and text probes; it downloads its model once (77 MB). Nothing is uploaded either way.</div>`);
       document.getElementById("wc-mir").onclick = () => res(false); document.getElementById("wc-clap").onclick = () => res(true);
     });
     const t0 = performance.now(); OWN.all = all; OWN.withClap = withClap; if (CANCEL) Atomics.store(CANCEL, 0, 0);
@@ -623,6 +647,7 @@
 
   function recompute(m) { return runJob({ phase2: m.phase2, readings: m.readings }, null); }   // the config panel's Apply, on your corpus
   document.addEventListener("DOMContentLoaded", () => {
+    if (IS_SAFARI) setTimeout(() => note("<b>Safari</b>: you can explore, listen and analyse your own corpus here, but Safari blocks the link to Ableton Live. To play into Live, open this page in <b>Chrome</b> or <b>Firefox</b>.", true), 1500);
     const b = document.getElementById("web-corpus"), inp = document.getElementById("web-corpus-input");
     if (b && inp) { b.onclick = () => inp.click(); inp.onchange = () => { if (inp.files.length) analyseFolder(inp.files).catch((e) => note("analysis failed: " + (e.message || e), true)); inp.value = ""; }; }
   });

@@ -878,7 +878,7 @@ function liveState(){
   const L=S.live, el=$("live-state");
   $("sd-live").textContent=`Ableton: link ${L.enabled?"on":"off"}`; $("sd-live").classList.toggle("on",!!L.enabled);
   if(!S.connected){ el.innerHTML='<span class="bad">no bridge</span> · start viz/bridge.py'; return; }
-  const why = {"no Hub":"no DMC Hub answering: is Live open with the Hub on Master and its web link on?","busy":"the Hub is linked to another page or tab","refused (origin)":"the Hub refused this page","connecting":"connecting…"}[L.web]||"";
+  const why = {"no Hub":"no DMC Hub answering: is Live open with the Hub on Master and its web link on?","busy":"the Hub is linked to another page or tab","refused (origin)":"the Hub refused this page","connecting":"connecting…","safari":"Safari blocks the link to Live: open this page in Chrome or Firefox to play into Ableton"}[L.web]||"";
   el.innerHTML = !L.enabled ? `off · links to the DMC Hub at <b>${L.host}:${L.port}</b>`
     : `${L.connected?'<span class="ok">Live linked</span>':'<span class="bad">'+(why||'no reply from the Hub yet')+'</span>'} · <b>${L.host}:${L.port}</b><br>`+
       `<b>${L.msgs_per_s}</b> msg/s · reading <b>${L.reading||"–"}</b>${L.since_ack_s!=null?` · ack ${L.since_ack_s}s ago`:""}`;
