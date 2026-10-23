@@ -305,9 +305,13 @@
           if (W.mode === "own") recompute(m);
           else this.push({ type: "job", state: "error", error: "the demo is precomputed: load your own corpus (◫ your corpus) to recompute" });
           break;
-        case "undo": case "defaults":
-          this.push({ type: "job", state: "error", error: "not available in the web version yet" }); break;
-        case "cancel": break;
+        case "undo":
+          if (W.mode === "own" && W.prev) swapTo(W.prev, "undo"); break;
+        case "defaults":
+          if (W.mode === "own") NATIVE_FETCH(url("data/defaults.json")).then((r) => r.json()).then((d) => runJob({ phase2: d.phase2, readings: d.readings }, "defaults"));
+          else this.push({ type: "job", state: "swapped", version: W.data.version, why: "defaults" });
+          break;
+        case "cancel": cancelJob(); break;
       }
     }
     probe(m) {                                                   // S9: reference clip — CLAP space centred when computed, else the live features
@@ -395,14 +399,55 @@
       document.body.appendChild(el); }
     el.innerHTML = html; el.hidden = false; if (done) setTimeout(() => { el.hidden = true; }, 6000);
   }
+  const TEXT_MODEL = () => { const P = url("models/clap/text_model_int8.onnx.part");          // for Y11 (text tags), loaded by the worker when the family is on
+    return { model: "laion/larger_clap_music_and_speech", parts: [{ url: P + "0", bytes: TEXT_PART_BYTES[0] }, { url: P + "1", bytes: TEXT_PART_BYTES[1] }],
+             vocab: url("models/clap/tokenizer/vocab.json"), merges: url("models/clap/tokenizer/merges.txt"), ort: url("vendor/ort/ort.wasm.min.mjs"), wasm: url("vendor/ort/") }; };
   function runWorker(msg, onProgress) {
+    if (msg.type === "finish") Object.assign(msg, { textModel: TEXT_MODEL(), labelsCsv: OWN.labelsCsv || null });
     return new Promise((res, rej) => {
       const w = engine();
       w.onmessage = (ev) => { const m = ev.data;
         if (m.type === "progress") onProgress && onProgress(m);
-        else if (m.type === "done") res(m); else if (m.type === "error") rej(new Error(m.error)); };
+        else if (m.type === "done") res(m); else if (m.type === "error") rej(new Error(m.error));
+        else if (m.type === "cancelled") rej(Object.assign(new Error("cancelled"), { cancelled: true })); };
       w.postMessage(msg);
     });
+  }
+  // undo / defaults / stop (bridge.py: STATE.previous, STATE.default, the job's cancel token)
+  const CANCEL = self.crossOriginIsolated && typeof SharedArrayBuffer === "function" ? new Int32Array(new SharedArrayBuffer(4)) : null;
+  let job = null;                                                 // {discarded} while a recompute runs
+  W.cur = null; W.prev = null;
+  function swapTo(state, why) {                                   // STATE.swap: previous ← current, current ← state
+    W.prev = W.cur; W.cur = state; adopt(state.r); lastConfig = state.config;
+    page.push({ type: "job", state: "swapped", version: state.r.payload.version, why });
+  }
+  function readingsEvent(p) {                                     // the worker's progress → bridge.py's readings events
+    if (p.stage === "compare") return { type: p.state === "end" ? "stage_end" : "stage_start", stage: "compare" };
+    if (p.stage !== "readings") return null;
+    if (p.sub) return { type: "stage_start", stage: p.sub };
+    return { type: "progress", stage: "readings", done: p.done, total: p.total, reading: p.reading || "", level: p.level || "", seconds: p.seconds || 0, cache_hits: p.cache_hits || {} };
+  }
+  async function runJob(config, why) {                            // one readings pass; why = null (Apply) or "defaults"
+    if (job) return page.push({ type: "job", state: "busy" });
+    job = { discarded: false }; if (CANCEL) Atomics.store(CANCEL, 0, 0);
+    const t0 = performance.now();
+    if (!why) page.push({ type: "job", state: "start" });
+    try {
+      const r = await runWorker({ type: "finish", cancel: CANCEL, config: Object.assign({}, config, { corpus_name: W.data.corpus_name }) }, (p) => {
+        const ev = readingsEvent(p); if (ev && !why) page.push({ type: "event", phase: "readings", ev }); });
+      if (job.discarded) return;
+      const state = { r, config: { phase2: config.phase2, readings: config.readings } };
+      if (why) return swapTo(state, why);
+      W.prev = W.cur; W.cur = state; adopt(r); lastConfig = state.config;
+      const s = +((performance.now() - t0) / 1000).toFixed(1);
+      page.push({ type: "job", state: "done", version: r.payload.version, timings: { total: s, phase2: null, readings: s } });
+    } catch (e) { if (!job.discarded) page.push(e.cancelled ? { type: "job", state: "cancelled" } : { type: "job", state: "error", error: String(e.message || e) }); }
+    finally { job = null; }
+  }
+  function cancelJob() {
+    if (!job) return;
+    if (CANCEL) Atomics.store(CANCEL, 0, 1);                      // the worker stops at its next check
+    else { job.discarded = true; page.push({ type: "job", state: "cancelled" }); }   // not isolated (Safari): the result is dropped when it arrives
   }
   function adopt(r, files) {
     W.data = r.payload; W.linkData = r.link; W.mode = "own"; W.clap = r.clap || null;
@@ -414,6 +459,8 @@
   }
   async function analyseFolder(list) {
     const all = Array.from(list).filter((f) => AUDIO_EXT.test(f.name)).sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
+    const csv = Array.from(list).find((f) => { const p = (f.webkitRelativePath || f.name).split("/"); return p.length <= 2 && p[p.length - 1] === "labels.csv"; });
+    OWN.labelsCsv = csv ? await csv.text() : null;                 // keys Y5: a labels.csv at the corpus root (as data/corpora/<corpus>/labels.csv on the desktop)
     if (!all.length) { note("no audio files in that folder (wav, aif, flac, mp3, m4a, ogg)", true); return; }
     const root = (all[0].webkitRelativePath || "").split("/")[0] || "your_corpus";
     const mb = all.reduce((s, f) => s + f.size, 0) / 1e6;
@@ -454,7 +501,7 @@
     note(`analysing <b>${files.length}</b> files: maps, clusters, neighbours…`);
     const cfg = Object.assign({}, lastConfig || W.data.config, { corpus_name: root.replace(/[^A-Za-z0-9_.-]/g, "_") });
     const r = await runWorker({ type: "finish", config: cfg }, (m) => m.stage === "readings" && note(`analysing · ${m.sub || (m.reading + " · " + m.level)} · ${m.done}/${m.total}`));
-    adopt(r, files);
+    adopt(r, files); W.cur = { r, config: { phase2: cfg.phase2, readings: cfg.readings } }; W.prev = null;
     if (page) page.push({ type: "hello", version: r.payload.version });
     note(`<b>${root}</b>: ${files.length} files, ${r.payload.levels.l1.n} clips, analysed in ${((performance.now() - t0) / 1000).toFixed(0)} s in this browser — nothing was uploaded.` +
          ` In Live, set DMC Corpus's <b>root</b> to this same folder.` + (unplayable ? ` ${unplayable} ogg/opus file(s) will analyse here but Live cannot load them.` : ""), true);
@@ -467,18 +514,7 @@
         else if (m.type === "error") rej(new Error(m.error)); };
       w.postMessage(msg, y48 ? [y.buffer, y48.buffer] : [y.buffer]); });
   }
-  async function recompute(m) {                                   // the config panel's Apply, on your corpus
-    lastConfig = { phase2: m.phase2, readings: m.readings };
-    const t0 = performance.now();
-    page.push({ type: "job", state: "start" });
-    try {
-      const r = await runWorker({ type: "finish", config: Object.assign({}, lastConfig, { corpus_name: W.data.corpus_name }) }, (p) => {
-        if (p.stage === "readings") page.push({ type: "event", phase: "readings", ev: { type: "progress", stage: "readings", done: p.done, total: p.total, reading: p.reading || "", level: p.level || "", seconds: 0, cache_hits: {} } }); });
-      adopt(r);
-      const s = +((performance.now() - t0) / 1000).toFixed(1);
-      page.push({ type: "job", state: "done", version: r.payload.version, timings: { total: s, phase2: null, readings: s } });
-    } catch (e) { page.push({ type: "job", state: "error", error: String(e.message || e) }); }
-  }
+  function recompute(m) { return runJob({ phase2: m.phase2, readings: m.readings }, null); }   // the config panel's Apply, on your corpus
   document.addEventListener("DOMContentLoaded", () => {
     const b = document.getElementById("web-corpus"), inp = document.getElementById("web-corpus-input");
     if (b && inp) { b.onclick = () => inp.click(); inp.onchange = () => { if (inp.files.length) analyseFolder(inp.files).catch((e) => note("analysis failed: " + (e.message || e), true)); inp.value = ""; }; }

@@ -252,4 +252,59 @@ export function rhythm(env, T, clips, durTotal, winS = 8.0) {
   return { cols: ["tempo", "onset_rate", "beat_strength"], rows, whole: one(0, n, durTotal),
            onset_t: on.map((t) => t * HOP / SR), onset_s: on.map((t) => hi > 0 ? env[t] / hi : 0) };
 }
+// librosa.beat.beat_track(onset_envelope=env, sr=22050, hop_length=512) (librosa 0.11): the global tempo (feature.tempo:
+// mean tempogram over an 8 s window, log-normal prior at 120 BPM, nothing above 320 BPM), then the dynamic programme
+// (tightness 100, trim). Kept as in librosa: np.round's half-to-even, the local score's same-mode convolution that skips
+// frame 0, the 0.01 · max threshold before the first beat, the last beat among cumscore's local maxima ≥ half their median.
+const roundEven = (x) => { const r = Math.round(x); return Math.abs(x % 1) === 0.5 && r % 2 ? r - 1 : r; };
+export function beatTrack(env) {
+  const n = env.length; if (!n || !env.some((v) => v)) return { tempo: 0, beats: [] };
+  const win = Math.floor(8.0 * SR / HOP), half = win >> 1;           // time_to_frames(ac_size = 8.0) floors
+  const pad = new Float64Array(n + 2 * half);
+  for (let i = 0; i < half; i++) { pad[i] = env[0] * i / half; pad[n + 2 * half - 1 - i] = env[n - 1] * i / half; }
+  for (let i = 0; i < n; i++) pad[half + i] = env[i];
+  let F = 1; while (F < 2 * win) F <<= 1;
+  const fftN = fftFactory(F), hw = Float64Array.from({ length: win }, (_, i) => 0.5 - 0.5 * Math.cos(2 * Math.PI * i / win));
+  const g = new Float64Array(win), re = new Float64Array(F), im = new Float64Array(F);
+  for (let t = 0; t < n; t++) {
+    re.fill(0); im.fill(0); for (let i = 0; i < win; i++) re[i] = pad[t + i] * hw[i];
+    fftN(re, im); for (let i = 0; i < F; i++) { re[i] = re[i] * re[i] + im[i] * im[i]; im[i] = 0; } fftN(re, im);
+    let mx = 0; for (let k = 0; k < win; k++) mx = Math.max(mx, Math.abs(re[k])); if (mx > 0) for (let k = 0; k < win; k++) g[k] += re[k] / mx;
+  }
+  for (let k = 0; k < win; k++) g[k] /= n;
+  let maxIdx = 0; const bpms = Float64Array.from({ length: win }, (_, k) => k === 0 ? Infinity : 60 * SR / (HOP * k));
+  while (maxIdx < win && !(bpms[maxIdx] < 320)) maxIdx++;
+  let best = 0, bv = -Infinity;
+  for (let k = maxIdx; k < win; k++) { const v = Math.log1p(1e6 * g[k]) - 0.5 * (Math.log2(bpms[k]) - Math.log2(120)) ** 2; if (v > bv) { bv = v; best = k; } }
+  const tempo = bpms[best], fpb = roundEven(SR / HOP * 60 / tempo);
+  // __normalize_onsets (std, ddof 1) and __beat_local_score
+  let mu = 0; for (const v of env) mu += v; mu /= n; let sd = 0; for (const v of env) sd += (v - mu) ** 2; sd = Math.sqrt(sd / Math.max(1, n - 1));
+  const on = Float64Array.from(env, (v) => v / (sd + 1.1754944e-38)), K = 2 * fpb + 1, K2 = K >> 1;
+  const w = Float64Array.from({ length: K }, (_, k) => Math.exp(-0.5 * ((k - fpb) * 32 / fpb) ** 2)), ls = new Float64Array(n);
+  for (let i = 0; i < n; i++) { let s = 0; for (let k = Math.max(0, i + K2 - n + 1); k < Math.min(i + K2, K); k++) s += w[k] * on[i + K2 - k]; ls[i] = s; }
+  // __beat_track_dp
+  let lmax = -Infinity; for (const v of ls) lmax = Math.max(lmax, v);
+  const thr = 0.01 * lmax, back = new Int32Array(n), cum = new Float64Array(n), lf = Math.log(fpb), h2 = roundEven(fpb / 2); let first = true;
+  for (let i = 0; i < n; i++) {
+    let bs = -Infinity, loc0 = -1;
+    for (let loc = i - h2; loc > i - 2 * fpb - 1; loc--) { if (loc < 0) break; const sc = cum[loc] - 100 * (Math.log(i - loc) - lf) ** 2; if (sc > bs) { bs = sc; loc0 = loc; } }
+    cum[i] = loc0 >= 0 ? ls[i] + bs : ls[i];
+    if (first && ls[i] < thr) back[i] = -1; else { back[i] = loc0; first = false; }
+  }
+  // __last_beat: the last local maximum of cumscore ≥ half the median of the local maxima
+  const isMax = (i) => cum[i] > (i > 0 ? cum[i - 1] : cum[0]) && cum[i] >= (i < n - 1 ? cum[i + 1] : cum[n - 1]);
+  const maxima = []; for (let i = 0; i < n; i++) if (isMax(i)) maxima.push(cum[i]); maxima.sort((a, b) => a - b);
+  const med = maxima.length ? (maxima.length % 2 ? maxima[maxima.length >> 1] : 0.5 * (maxima[maxima.length / 2 - 1] + maxima[maxima.length / 2])) : 0;
+  let tail = n - 1; for (let i = n - 1; i >= 0; i--) if (isMax(i) && cum[i] >= 0.5 * med) { tail = i; break; }
+  const beat = new Uint8Array(n); for (let i = tail; i >= 0; i = back[i]) beat[i] = 1;
+  // __trim_beats: drop leading/trailing frames whose local score ≤ half the RMS of the hanning-smoothed beat envelope
+  const bl = []; for (let i = 0; i < n; i++) if (beat[i]) bl.push(ls[i]);
+  const hw5 = [0, 0.5, 1, 0.5, 0], conv = new Float64Array(bl.length + 4);
+  for (let a = 0; a < bl.length; a++) for (let k = 0; k < 5; k++) conv[a + k] += bl[a] * hw5[k];
+  const sm = conv.slice(2, Math.min(conv.length, n + 2)); let ms = 0; for (const v of sm) ms += v * v; const trim = sm.length ? 0.5 * Math.sqrt(ms / sm.length) : 0;
+  for (let i = 0; i < n && ls[i] <= trim; i++) beat[i] = 0;
+  for (let i = n - 1; i >= 0 && ls[i] <= trim; i--) beat[i] = 0;
+  const beats = []; for (let i = 0; i < n; i++) if (beat[i]) beats.push(i * HOP / SR);
+  return { tempo, beats };
+}
 export { fftFactory };

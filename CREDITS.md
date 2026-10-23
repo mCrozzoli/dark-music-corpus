@@ -55,6 +55,11 @@ This file goes into the public `dark-music-corpus` repo and the site's about pag
 | Isolation Forest | F. T. Liu, K. M. Ting, Z.-H. Zhou, ICDM 2008 |
 | Local Outlier Factor | M. Breunig, H.-P. Kriegel, R. Ng, J. Sander, SIGMOD 2000 |
 | Louvain communities | V. Blondel, J.-L. Guillaume, R. Lambiotte, E. Lefebvre, J. Stat. Mech. 2008 |
+| Betweenness centrality | U. Brandes, "A faster algorithm for betweenness centrality", J. Math. Sociology 25, 2001 |
+| DBSCAN | M. Ester, H.-P. Kriegel, J. Sander, X. Xu, KDD 1996 |
+| Ward linkage | J. H. Ward, "Hierarchical Grouping to Optimize an Objective Function", JASA 58, 1963 |
+| Beat tracking | D. P. W. Ellis, "Beat Tracking by Dynamic Programming", J. New Music Research 36, 2007 (via librosa) |
+| Key profiles | C. Krumhansl, E. Kessler, Psychological Review 89, 1982 |
 | Audio novelty | J. Foote, "Automatic audio segmentation using a measure of audio novelty", ICME 2000 |
 | MIR features | librosa: B. McFee et al., "librosa: Audio and Music Signal Analysis in Python", SciPy 2015 |
 
@@ -97,9 +102,12 @@ preprocessing, data processing, mapping utilities) and its web style kit (`darks
 
 - **umap-js** 1.4.0 by the PAIR team (Google), bundled with esbuild together with its dependencies
   **ml-matrix** 6.15.1, **ml-levenberg-marquardt** 2.1.1, **ml-array-max/min/rescale** 2.0.0 and **is-any-array** 0.1.1 (all MIT).
-- The MIR features, segmentation, rhythm, scaling, k-means with silhouette, Isolation Forest, kNN and keys are a
-  JavaScript port of this project's engine (librosa 0.11 formulas; scikit-learn's algorithms), written for this page;
-  so are the PCA, t-SNE (Barnes-Hut, after scikit-learn's TSNE) and SOM (after MiniSom's training rule) maps.
+- The whole engine runs in the page as a JavaScript port of this project's engine, written for this page: the MIR
+  features, segmentation, rhythm and beat tracking (librosa 0.11 formulas); the scalers, the PCA, t-SNE (Barnes-Hut,
+  after scikit-learn's TSNE) and SOM (after MiniSom's training rule) maps; k-means, GMM, agglomerative (after SciPy's
+  linkage and scikit-learn's tree cut), spectral, HDBSCAN and DBSCAN clustering, Isolation Forest and LOF (after
+  scikit-learn); kNN; the readings comparison; and every key family, with Louvain communities and betweenness after
+  NetworkX 3.5 (including CPython's Mersenne Twister, so the seeded results match). No library code is copied.
 - **ONNX Runtime Web** 1.30.0 by Microsoft (MIT): runs the CLAP audio encoder in the browser (WASM).
 - **CLAP audio and text encoders** of `laion/larger_clap_music_and_speech` (Apache-2.0, LAION; Wu et al., ICASSP 2023),
   exported to ONNX (opset 17) and quantised to 8-bit weights for the page (`models/clap/`, notice in
