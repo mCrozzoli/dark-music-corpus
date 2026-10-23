@@ -123,12 +123,16 @@
       if (p === "/api/keys_catalogue") return NATIVE_FETCH(url("data/keys_catalogue.json"));
       if (p === "/api/corpora") return json([{ name: W.data.corpus_name, path: `data/corpora/${W.data.corpus_name}`, files: W.data.tracks.length,
                                               duration_s: W.data.tracks.reduce((s, t) => s + t.duration, 0), symlink: false }]);
-      for (const kind of ["presets", "traces"]) {
+      const shipped = async (kind) => kind === "presets" ? await NATIVE_FETCH(url("data/presets/index.json")).then((r) => r.ok ? r.json() : []).catch(() => []) : [];
+      for (const kind of ["presets", "traces"]) {                  // presets: the desktop's shipped ones (lab/presets) + the ones saved in this browser
         if (p === `/api/${kind}`) {
           if (m === "POST") { const b = JSON.parse(init.body || "{}"), all = LS.get(kind, {}); all[String(b.name).replace(/[^A-Za-z0-9_.-]/g, "_")] = b.data; LS.set(kind, all); return json({ ok: true }); }
-          return json(Object.keys(LS.get(kind, {})).sort());
+          return json([...new Set([...(await shipped(kind)), ...Object.keys(LS.get(kind, {}))])].sort());
         }
-        if (p.startsWith(`/api/${kind}/`)) { const n = decodeURIComponent(p.split("/").pop()), all = LS.get(kind, {}); return n in all ? json(all[n]) : json({ error: "not found" }, 404); }
+        if (p.startsWith(`/api/${kind}/`)) { const n = decodeURIComponent(p.split("/").pop()), all = LS.get(kind, {});
+          if (n in all) return json(all[n]);
+          if ((await shipped(kind)).includes(n)) return NATIVE_FETCH(url(`data/presets/${encodeURIComponent(n)}.json`));
+          return json({ error: "not found" }, 404); }
       }
       if (p === "/clip") {
         const b = await W.audio.clip(+u.searchParams.get("f"), +u.searchParams.get("t0"), +u.searchParams.get("t1"));
