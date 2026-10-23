@@ -208,7 +208,7 @@ svg .lbl{font:11px var(--dm-font);fill:var(--ink);paint-order:stroke;stroke:var(
   <span class="tab" id="lv-l1" title="clips (L1) · key V toggles">clips</span>
   <span class="tab" id="lv-l0" title="tracks (L0) · key V toggles">tracks</span>
   <span class="tab" id="zoom-reset" title="reset view (0)">⌖</span>
-  <span class="tab" id="web-corpus" title="analyse a folder of your own audio in this browser — nothing is uploaded">◫ your corpus</span><a class="tab" href="about.html" title="what this is, the Live link, the demo audio, credits" style="text-decoration:none;color:inherit">about</a><input type="file" id="web-corpus-input" webkitdirectory multiple hidden>
+  <span class="tab" id="web-corpus" title="analyse a folder of your own audio in this browser — nothing is uploaded">◫ your corpus</span><span class="tab" id="web-save" title="save this analysis to your computer (a .dmc file: features, readings, keys, config — no audio)">⤓ save</span><span class="tab" id="web-open" title="open a saved analysis (.dmc) — no re-analysis">⤒ open</span><a class="tab" href="about.html" title="what this is, the Live link, the demo audio, credits" style="text-decoration:none;color:inherit">about</a><input type="file" id="web-corpus-input" webkitdirectory multiple hidden>
   <span id="chip">no bridge</span>
 </header>
 <div id="stage-wrap"><svg id="stage"></svg></div>
@@ -253,7 +253,7 @@ svg .lbl{font:11px var(--dm-font);fill:var(--ink);paint-order:stroke;stroke:var(
   <div id="cf-bar"></div>
   <div id="cf-stages"></div>
   <div class="cf-form" id="cf-form"></div>
-  <div class="lg-h">PRESETS · lab/presets/</div>
+  <div class="lg-h">PRESETS · in this browser · <span class="lk" style="cursor:pointer;text-decoration:underline" id="pr-export" title="save the selected preset (or the form) as a .json file — the desktop's lab/presets format">export</span> · <span class="lk" style="cursor:pointer;text-decoration:underline" id="pr-import" title="add a preset .json file (from the desktop or another browser)">import</span></div>
   <div class="wcgrid">
     <input class="inp" id="pr-name" placeholder="preset name" spellcheck="false">
     <button class="wbtn" id="pr-save" title="save the form (corpus, Phase 2 config, readings) as lab/presets/<name>.json">save preset</button>
@@ -336,7 +336,7 @@ svg .lbl{font:11px var(--dm-font);fill:var(--ink);paint-order:stroke;stroke:var(
       <button class="wbtn" id="tr-clear">✕ clear</button>
     </div>
     <div class="fader"><span>rate</span><input type="range" id="tr-rate" min="0.5" max="8" step="0.5" value="2"><span class="fv" id="tr-rate-v">2/s</span></div>
-    <div class="seglabel">SAVE · darkdata/traces/</div>
+    <div class="seglabel">SAVE · in this browser · <span class="lk" style="cursor:pointer;text-decoration:underline" id="tr-export" title="save the current trace as a .json file — the desktop's darkdata/traces format">export</span> · <span class="lk" style="cursor:pointer;text-decoration:underline" id="tr-import" title="load a trace .json file">import</span></div>
     <div class="wcgrid">
       <input class="inp" id="tr-name" placeholder="trace name" spellcheck="false">
       <button class="wbtn" id="tr-save">save</button>

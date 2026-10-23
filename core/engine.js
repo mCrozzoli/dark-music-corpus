@@ -713,6 +713,7 @@ self.onmessage = async (ev) => {
   try {
     if (m.type === "file") { cancelFlag = m.cancel || null; await addFile(m); post({ type: "progress", stage: "features", done: m.i + 1, total: m.total, name: m.name }); }
     else if (m.type === "dump") post({ type: "dump", files: files.filter(Boolean).map((f) => ({ name: f.name, rel_path: f.rel_path, t0: f.t0, t1: f.t1, cols: f.cols, rows: f.rows, whole: f.whole, groups: f.groups, events: f.events, note: f.note })) });   // the Phase 2 table, for tests
+    else if (m.type === "restore") { files.length = 0; CACHE.clear(); clapOn = false; m.files.forEach((f, i) => { files[i] = f; }); post({ type: "restored", n: files.length }); }   // a saved analysis (.dmc)
     else if (m.type === "reset") { files.length = 0; clapOn = false; CACHE.clear(); }
     else if (m.type === "text") {                                 // the text probe (bridge.compute_probe "text" + keys.text_embeddings' collapse check)
       await CLAP.loadText(m.parts, m.vocab, m.merges, m.ort, m.wasm, (got, total) => post({ type: "progress", stage: "text_model", got, total }));

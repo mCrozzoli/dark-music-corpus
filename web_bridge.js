@@ -72,6 +72,7 @@
     },
     trackUrl(f) {                                                // demo: no whole tracks are hosted ("play on" is off)
       if (this.mode !== "own") return null;
+      if (!OWN.files[f]) return null;                             // a loaded analysis whose audio folder is not linked yet
       if (!this.urls.has(f)) this.urls.set(f, URL.createObjectURL(OWN.files[f]));
       return this.urls.get(f);
     },
@@ -80,6 +81,7 @@
   // own corpus: the visitor's File objects; a decoded track is kept for the two most recent files
   const OWN = (W.own = { files: [], decoded: new Map() });
   async function ownTrack(f) {
+    if (!OWN.files[f]) throw new Error("the audio folder is not linked: open it with “link audio folder”");
     if (!OWN.decoded.has(f)) {
       OWN.decoded.set(f, OWN.files[f].arrayBuffer().then((b) => new OfflineAudioContext(2, 1, 48000).decodeAudioData(b)));
       while (OWN.decoded.size > 2) OWN.decoded.delete(OWN.decoded.keys().next().value);
@@ -127,7 +129,9 @@
       const shipped = async (kind) => kind === "presets" ? await NATIVE_FETCH(url("data/presets/index.json")).then((r) => r.ok ? r.json() : []).catch(() => []) : [];
       for (const kind of ["presets", "traces"]) {                  // presets: the desktop's shipped ones (lab/presets) + the ones saved in this browser
         if (p === `/api/${kind}`) {
-          if (m === "POST") { const b = JSON.parse(init.body || "{}"), all = LS.get(kind, {}); all[String(b.name).replace(/[^A-Za-z0-9_.-]/g, "_")] = b.data; LS.set(kind, all); return json({ ok: true }); }
+          if (m === "POST") { const b = JSON.parse(init.body || "{}"), all = LS.get(kind, {}), d = new Date(), z = (x) => String(x).padStart(2, "0");
+            const name = String(b.name || `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`).replace(/[^A-Za-z0-9_.-]/g, "_");   // bridge.py: name or a timestamp
+            all[name] = b.data; LS.set(kind, all); return json({ ok: true, name }); }
           return json([...new Set([...(await shipped(kind)), ...Object.keys(LS.get(kind, {}))])].sort());
         }
         if (p.startsWith(`/api/${kind}/`)) { const n = decodeURIComponent(p.split("/").pop()), all = LS.get(kind, {});
@@ -451,6 +455,7 @@
     if (!why) page.push({ type: "job", state: "start" });
     try {
       const ev = (e) => !why && page.push({ type: "event", phase: "phase2", ev: e });
+      if (p2Key(config.phase2) !== OWN.p2Done && !(OWN.all || []).length) throw new Error("these Phase 2 settings need the audio: link the audio folder first (it was loaded from a saved analysis)");
       if (p2Key(config.phase2) !== OWN.p2Done) {                   // dmc.engine.run: the corpus or its Phase 2 config changed
         OWN.p2Done = null; const tp = performance.now(); ev({ type: "stage_start", stage: "features" });
         await runPhase2(config.phase2 || {}, OWN.withClap, (what, m) => {
@@ -646,7 +651,81 @@
   }
 
   function recompute(m) { return runJob({ phase2: m.phase2, readings: m.readings }, null); }   // the config panel's Apply, on your corpus
+  // ---------------------------------------------------------------- files on your computer: a saved analysis (.dmc), presets, traces
+  const b64 = (u8) => { let s2 = ""; for (let i = 0; i < u8.length; i += 0x8000) s2 += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s2); };
+  const unb64 = (s2) => { const bin = atob(s2), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
+  const relOfFile = (f) => (f.webkitRelativePath || f.name).split("/").slice(1).join("/") || f.name;
+  function download(blob, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); }
+  const pickFile = (accept, dir = false) => new Promise((res) => { const i = document.createElement("input"); i.type = "file"; if (accept) i.accept = accept; if (dir) { i.webkitdirectory = true; i.multiple = true; }
+    i.onchange = () => res(dir ? i.files : i.files[0]); i.click(); });
+  function workerCall(msg, reply) { return new Promise((res, rej) => { const w = engine(); const prev = w.onmessage;
+    w.onmessage = (ev) => { if (ev.data.type === reply) { w.onmessage = prev; res(ev.data); } else if (ev.data.type === "error") { w.onmessage = prev; rej(new Error(ev.data.error)); } }; w.postMessage(msg); }); }
+  async function saveAnalysis() {
+    if (W.mode !== "own" || !W.cur) return note("The demo is already on this page: analyse a folder of your own (◫ your corpus), then save it.", true);
+    note("saving the analysis…");
+    const { files } = await workerCall({ type: "dump" }, "dump"), clap = W.clap, d = clap ? clap.length / W.data.levels.l1.n : 0;
+    const fl = files.map((f) => { const cc = (f.groups.clap || []).length, nc = f.cols.length - cc, M = new Float32Array(f.rows.length * nc);
+      f.rows.forEach((r, i) => { for (let j = 0; j < nc; j++) M[i * nc + j] = r[j]; });
+      const o = Object.assign({}, f, { rows: b64(new Uint8Array(M.buffer)), ncols: nc }); return o; });
+    const obj = { format: "dmc-analysis", version: 1, saved: new Date().toISOString(), app: "Dark Music Corpus (web)", corpus_name: W.data.corpus_name,
+      config: W.cur.config, with_clap: !!OWN.withClap, clap_done: !!OWN.clapDone, clap_model: OWN.clapModel || null, labels_csv: OWN.labelsCsv || null,
+      audio: OWN.files.map((f) => ({ rel_path: relOfFile(f), size: f.size })), files: fl,
+      result: { payload: W.cur.r.payload, link: W.cur.r.link }, clap: clap ? { d, data: b64(new Uint8Array(clap.buffer, clap.byteOffset, clap.byteLength)) } : null };
+    const blob = await new Response(new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
+    download(blob, `${W.data.corpus_name}.dmc`);
+    note(`saved <b>${W.data.corpus_name}.dmc</b> (${(blob.size / 1e6).toFixed(1)} MB): the analysis, its readings and keys, and the config — no audio. Open it later with <b>⤒ open</b>.`, true);
+  }
+  async function openAnalysis() {
+    const file = await pickFile(".dmc"); if (!file) return;
+    note(`opening <b>${file.name}</b>…`);
+    let o; try { o = JSON.parse(await new Response(file.stream().pipeThrough(new DecompressionStream("gzip"))).text()); } catch (e) { return note("this is not a Dark Music Corpus analysis file (.dmc)", true); }
+    if (o.format !== "dmc-analysis") return note("this is not a Dark Music Corpus analysis file (.dmc)", true);
+    const clap = o.clap ? new Float32Array(unb64(o.clap.data).buffer) : null; let off = 0;
+    const files = o.files.map((f) => { const M = new Float32Array(unb64(f.rows).buffer), nc = f.ncols, n = f.t0.length, cc = (f.groups.clap || []).length;
+      const rows = Array.from({ length: n }, (_, i) => { const r = Array.from(M.subarray(i * nc, (i + 1) * nc)); for (let j = 0; j < cc; j++) r.push(clap[(off + i) * cc + j]); return r; });
+      off += n; const g = Object.assign({}, f, { rows }); delete g.ncols; return g; });
+    await workerCall({ type: "restore", files }, "restored");
+    Object.assign(OWN, { all: [], files: [], audioSigs: o.audio || [], p2Done: p2Key(o.config.phase2), clapDone: o.clap_done, clapModel: o.clap_model, withClap: o.with_clap, labelsCsv: o.labels_csv });
+    OWN.decoded.clear(); for (const u of W.audio.urls.values()) URL.revokeObjectURL(u); W.audio.urls.clear();
+    const r = { payload: o.result.payload, link: o.result.link, clap };
+    adopt(r); W.cur = { r, config: o.config }; W.prev = null; lastConfig = o.config;
+    if (page) page.push({ type: "hello", version: r.payload.version });
+    note(`opened <b>${o.corpus_name}</b> (saved ${String(o.saved).slice(0, 16).replace("T", " ")}): ${r.payload.levels.l1.n} clips, ${r.payload.readings.length} readings. ` +
+         `To listen and to play into Live, link its audio folder:<div style="margin-top:8px"><button class="wbtn" id="wc-link">link audio folder</button></div>`, true);
+    const b = document.getElementById("wc-link"); if (b) b.onclick = () => linkAudio();
+  }
+  async function linkAudio() {
+    const list = await pickFile(null, true); if (!list || !list.length) return;
+    const by = new Map(Array.from(list).map((f) => [relOfFile(f), f])), want = OWN.audioSigs || [], files = [], missing = [];
+    for (const s2 of want) { const f = by.get(s2.rel_path); if (f && f.size === s2.size) files.push(f); else { files.push(null); missing.push(s2.rel_path + (f ? " (changed)" : "")); } }
+    OWN.files = files; OWN.all = missing.length ? [] : files; OWN.decoded.clear(); for (const u of W.audio.urls.values()) URL.revokeObjectURL(u); W.audio.urls.clear();
+    note(missing.length ? `linked ${files.length - missing.length} of ${files.length} files; not found or changed: ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? "…" : ""}`
+                        : `audio linked: all ${files.length} files match. You can listen, play into Live, and re-analyse with other Phase 2 settings.`, true);
+  }
+  async function exportJson(kind) {                               // the desktop's format: lab/presets/<name>.json, darkdata/traces/<name>.json
+    let name, data;
+    if (kind === "presets") { const sel = $id("pr-list").value; name = sel || $id("pr-name").value.trim() || "my_preset";
+      data = sel ? await (await fetch("/api/presets/" + encodeURIComponent(sel))).json() : S.form; }
+    else { const L = S.D.levels.l1; if (!S.trace.length) return note("record or draw a trace first", true); name = $id("tr-name").value.trim() || "trace";
+      data = { reading: S.D.readings[S.ri], corpus: S.D.corpus, created: new Date().toISOString(), clip_ids: S.trace.map((i) => L.clip_id[i]) }; }
+    download(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }), `${name.replace(/[^A-Za-z0-9_.-]/g, "_")}.json`);
+  }
+  async function importJson(kind) {
+    const f = await pickFile(".json"); if (!f) return; let data; try { data = JSON.parse(await f.text()); } catch (e) { return note(`${f.name} is not JSON`, true); }
+    const name = f.name.replace(/\.json$/i, "");
+    if (kind === "presets" && !(data && (data.phase2 || data.readings))) return note(`${f.name} is not a preset (it has no phase2 / readings)`, true);
+    if (kind === "traces" && !(data && Array.isArray(data.clip_ids))) return note(`${f.name} is not a trace (it has no clip_ids)`, true);
+    await fetch(`/api/${kind}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, data }) });
+    if (kind === "presets") { await loadPresets(); $id("pr-list").value = name; note(`imported the preset <b>${name}</b>: “load into the form”, then apply`, true); }
+    else { loadTraces(); const L = S.D.levels.l1, ids = data.clip_ids.map((c) => L.clipIdx.get(c)).filter((i) => i != null); S.trace = ids; traceDraw();
+      note(`imported the trace <b>${name}</b>: ${ids.length} of ${data.clip_ids.length} clips are in this corpus`, true); }
+  }
+  const $id = (x) => document.getElementById(x);
+  W.saveAnalysis = saveAnalysis; W.openAnalysis = openAnalysis; W.linkAudio = linkAudio;
   document.addEventListener("DOMContentLoaded", () => {
+    const on = (id, fn) => { const e = $id(id); if (e) e.onclick = fn; };
+    on("web-save", saveAnalysis); on("web-open", openAnalysis);
+    on("pr-export", () => exportJson("presets")); on("pr-import", () => importJson("presets")); on("tr-export", () => exportJson("traces")); on("tr-import", () => importJson("traces"));
     if (IS_SAFARI) setTimeout(() => note("<b>Safari</b>: you can explore, listen and analyse your own corpus here, but Safari blocks the link to Ableton Live. To play into Live, open this page in <b>Chrome</b> or <b>Firefox</b>.", true), 1500);
     const b = document.getElementById("web-corpus"), inp = document.getElementById("web-corpus-input");
     if (b && inp) { b.onclick = () => inp.click(); inp.onchange = () => { if (inp.files.length) analyseFolder(inp.files).catch((e) => note("analysis failed: " + (e.message || e), true)); inp.value = ""; }; }
