@@ -1056,7 +1056,7 @@ function readingForm(r,k){
   h+=knob("balance groups",`${P}.balance_groups`,"bool","","each group counts as one block (÷√columns)")+knob("CLAP weight",`${P}.weights.clap`,"num","1")+knob("PCA first · dims",`${P}.pre_pca`,"num","none");
   h+=`<div class="sub">map (DR)</div>`+knob("method",`${P}.dr.method`,"select",["pca","umap","tsne","som"]);
   if(dm==="umap") h+=knob("n_neighbors",`${P}.dr.n_neighbors`,"num")+knob("min_dist",`${P}.dr.min_dist`,"num")+knob("metric",`${P}.dr.metric`,"select",["euclidean","cosine","manhattan","correlation"]);
-  if(dm==="tsne") h+=knob("perplexity",`${P}.dr.perplexity`,"num")+`<div class="tx-note">t-SNE is the slow one: about 10 s for 3400 clips</div>`;
+  if(dm==="tsne") h+=knob("perplexity",`${P}.dr.perplexity`,"num")+`<div class="tx-note">t-SNE is the slow one: about 20 s for 3400 clips in the browser</div>`;
   if(dm==="som") h+=`<div class="tx-knob"><span>grid</span><input data-p="${P}.dr.som_grid" data-k="list" value="${(r.dr.som_grid||[16,16]).join(", ")}"></div>`;
   h+=`<div class="sub">clusters</div>`+knob("method",`${P}.cluster.method`,"select",["kmeans","gmm","agglomerative","spectral","hdbscan","dbscan"]);
   if(!["hdbscan","dbscan"].includes(cm)){

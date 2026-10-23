@@ -48,7 +48,7 @@ This file goes into the public `dark-music-corpus` repo and the site's about pag
 | Method | Reference |
 |---|---|
 | UMAP | L. McInnes, J. Healy, J. Melville, *UMAP: Uniform Manifold Approximation and Projection*, arXiv:1802.03426, 2018 |
-| t-SNE | L. van der Maaten, G. Hinton, "Visualizing Data using t-SNE", JMLR 9, 2008 |
+| t-SNE | L. van der Maaten, G. Hinton, "Visualizing Data using t-SNE", JMLR 9, 2008 · Barnes-Hut: L. van der Maaten, "Accelerating t-SNE using Tree-Based Algorithms", JMLR 15, 2014 |
 | Self-Organising Map | T. Kohonen, *Self-Organizing Maps*, Springer, 1995 |
 | HDBSCAN | R. Campello, D. Moulavi, J. Sander, PAKDD 2013; L. McInnes, J. Healy, S. Astels, JOSS 2017 |
 | k-means, GMM, agglomerative, spectral clustering, PCA | via scikit-learn (Pedregosa et al., JMLR 12, 2011) |
@@ -67,6 +67,7 @@ This file goes into the public `dark-music-corpus` repo and the site's about pag
 | SciPy | 1.16.3 | BSD-3-Clause |
 | scikit-learn | 1.7.2 | BSD-3-Clause |
 | umap-learn | 0.5.9 | BSD-3-Clause |
+| MiniSom (Giuseppe Vettigli) | 2.3.5 | MIT |
 | pynndescent | 0.5.13 | BSD-2-Clause |
 | pandas | 2.3.3 | BSD-3-Clause |
 | PyArrow | 24.0.0 | Apache-2.0 |
@@ -97,7 +98,8 @@ preprocessing, data processing, mapping utilities) and its web style kit (`darks
 - **umap-js** 1.4.0 by the PAIR team (Google), bundled with esbuild together with its dependencies
   **ml-matrix** 6.15.1, **ml-levenberg-marquardt** 2.1.1, **ml-array-max/min/rescale** 2.0.0 and **is-any-array** 0.1.1 (all MIT).
 - The MIR features, segmentation, rhythm, scaling, k-means with silhouette, Isolation Forest, kNN and keys are a
-  JavaScript port of this project's engine (librosa 0.11 formulas; scikit-learn's algorithms), written for this page.
+  JavaScript port of this project's engine (librosa 0.11 formulas; scikit-learn's algorithms), written for this page;
+  so are the PCA, t-SNE (Barnes-Hut, after scikit-learn's TSNE) and SOM (after MiniSom's training rule) maps.
 - **ONNX Runtime Web** 1.30.0 by Microsoft (MIT): runs the CLAP audio encoder in the browser (WASM).
 - **CLAP audio and text encoders** of `laion/larger_clap_music_and_speech` (Apache-2.0, LAION; Wu et al., ICASSP 2023),
   exported to ONNX (opset 17) and quantised to 8-bit weights for the page (`models/clap/`, notice in

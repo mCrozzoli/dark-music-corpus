@@ -7,10 +7,10 @@
 // worker → main thread:  {type:"progress", stage, done, total, …} · {type:"done", payload, link} · {type:"error", error}
 //
 // Ported: fixed 2 s / 50 % segmentation with zero-crossing snap; the MIR groups (core/mir.js, desktop-equivalent, see
-// TESTS_2026-10-22.md); rhythm (tempo, onset rate, beat strength, onsets); readings with robust scaling + clip, UMAP,
+// TESTS_2026-10-22.md); rhythm (tempo, onset rate, beat strength, onsets); readings with robust scaling + clip, the maps (UMAP, PCA, t-SNE Barnes-Hut after sklearn, SOM after MiniSom),
 // k-means with k auto by silhouette, isolation forest, kNN, 2-D density; keys S1 (x, y), Y1 (cluster), Y4 (outlier),
 // S11 (outlier score), S8 (density), S2 (raw features), Y5 (track, folder). Not yet: CLAP readings, the other key
-// families, t-SNE/PCA/SOM, the other clusterings, beat tracking, the readings comparison.
+// families, the other clusterings, beat tracking, the readings comparison.
 import { SR, HOP, frameFeatures, summarize, summarizeWhole, rhythm } from "./mir.js";
 import { UMAP, Matrix, EigenvalueDecomposition, SingularValueDecomposition } from "../vendor/umap-js.esm.js";
 import * as CLAP from "./clap.js";
@@ -263,6 +263,91 @@ function spectral(X, k, nn, seed) {                              // sklearn Spec
   const sv = new SingularValueDecomposition(P), U = sv.leftSingularVectors, W = sv.rightSingularVectors, Rot = U.mmul(W.transpose());
   return Int32Array.from(E, (r) => { let b = 0, bv = -Infinity; for (let c = 0; c < k; c++) { let s = 0; for (let a = 0; a < k; a++) s += r[a] * Rot.get(a, c); s = Math.abs(s); if (s > bv) { bv = s; b = c; } } return b; });
 }
+function tsne(X, dims, perplexity, seed, onIter) {               // sklearn TSNE(method="barnes_hut", init="pca", learning_rate="auto", max_iter=1000)
+  const n = X.length, K = Math.min(n - 1, Math.floor(3 * perplexity + 1)), kn = knn(X, K);
+  // conditional P per point by binary search on β to the desired perplexity (sklearn _binary_search_perplexity, squared distances)
+  const rows = Array.from({ length: n }, () => new Map()), H = Math.log(perplexity);
+  for (let i = 0; i < n; i++) {
+    const D = Float64Array.from({ length: K }, (_, t) => kn.dist[i * K + t] ** 2); let beta = 1, lo = -Infinity, hi = Infinity, P = new Float64Array(K);
+    for (let it = 0; it < 100; it++) {
+      let sp = 0; for (let t = 0; t < K; t++) { P[t] = Math.exp(-D[t] * beta); sp += P[t]; } if (sp === 0) sp = 1e-8;
+      let sdp = 0; for (let t = 0; t < K; t++) { P[t] /= sp; sdp += D[t] * P[t]; }
+      const h = Math.log(sp) + beta * sdp, diff = h - H; if (Math.abs(diff) <= 1e-5) break;
+      if (diff > 0) { lo = beta; beta = hi === Infinity ? beta * 2 : (beta + hi) / 2; } else { hi = beta; beta = lo === -Infinity ? beta / 2 : (beta + lo) / 2; }
+    }
+    for (let t = 0; t < K; t++) rows[i].set(kn.idx[i * K + t], P[t]);
+  }
+  // symmetrise, normalise to sum 1
+  const Pij = [], Pj = [], Pv = []; let tot = 0;
+  const sym = Array.from({ length: n }, () => new Map());
+  for (let i = 0; i < n; i++) for (const [j, v] of rows[i]) { sym[i].set(j, (sym[i].get(j) || 0) + v); sym[j].set(i, (sym[j].get(i) || 0) + v); }
+  for (let i = 0; i < n; i++) for (const [j, v] of sym[i]) { Pij.push(i); Pj.push(j); Pv.push(v); tot += v; }
+  for (let e = 0; e < Pv.length; e++) Pv[e] /= Math.max(tot, 1e-12);
+  // init: PCA, first column's sd scaled to 1e-4
+  let Y = pca(X, dims); { let mu = 0; for (const y of Y) mu += y[0]; mu /= n; let sd = 0; for (const y of Y) sd += (y[0] - mu) ** 2; sd = Math.sqrt(sd / n) || 1;
+    Y = Y.map((y) => Float64Array.from(y, (v) => v / sd * 1e-4)); }
+  const lr = Math.max(n / 12 / 4, 50), upd = Y.map(() => new Float64Array(dims)), gains = Y.map(() => new Float64Array(dims).fill(1)), theta = 0.5;
+  for (let it = 0; it < 1000; it++) {
+    const exag = it < 250 ? 12 : 1, mom = it < 250 ? 0.5 : 0.8;
+    // quadtree over Y (2-D)
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const y of Y) { x0 = Math.min(x0, y[0]); x1 = Math.max(x1, y[0]); y0 = Math.min(y0, y[1]); y1 = Math.max(y1, y[1]); }
+    const w0 = Math.max(x1 - x0, y1 - y0) * 1.0001 + 1e-12, root = { cx: x0 + w0 / 2, cy: y0 + w0 / 2, w: w0, n: 0, mx: 0, my: 0, kids: null, pt: -1 };
+    const insert = (node, i, depth) => {
+      node.mx = (node.mx * node.n + Y[i][0]) / (node.n + 1); node.my = (node.my * node.n + Y[i][1]) / (node.n + 1); node.n++;
+      if (node.n === 1) { node.pt = i; return; }
+      if (depth > 40) return;                                          // coincident points stay together
+      if (!node.kids) { node.kids = [0, 1, 2, 3].map((q) => ({ cx: node.cx + (q & 1 ? 1 : -1) * node.w / 4, cy: node.cy + (q & 2 ? 1 : -1) * node.w / 4, w: node.w / 2, n: 0, mx: 0, my: 0, kids: null, pt: -1 }));
+        if (node.pt >= 0) { const o = node.pt; node.pt = -1; const q = (Y[o][0] > node.cx ? 1 : 0) | (Y[o][1] > node.cy ? 2 : 0); insert(node.kids[q], o, depth + 1); } }
+      const q = (Y[i][0] > node.cx ? 1 : 0) | (Y[i][1] > node.cy ? 2 : 0); insert(node.kids[q], i, depth + 1);
+    };
+    for (let i = 0; i < n; i++) insert(root, i, 0);
+    const neg = Y.map(() => new Float64Array(2)); let sQ = 0;
+    for (let i = 0; i < n; i++) {
+      const st = [root];
+      while (st.length) { const nd = st.pop(); if (!nd.n) continue;
+        const dx = Y[i][0] - nd.mx, dy = Y[i][1] - nd.my, d2 = dx * dx + dy * dy;
+        if (!nd.kids || nd.w / Math.sqrt(d2) < theta) { if (nd.n === 1 && nd.pt === i) continue;
+          const q = 1 / (1 + d2), m = nd.n; sQ += m * q; neg[i][0] += m * q * q * dx; neg[i][1] += m * q * q * dy; }
+        else for (const k of nd.kids) st.push(k); }
+    }
+    const pos = Y.map(() => new Float64Array(2));
+    for (let e = 0; e < Pv.length; e++) { const i = Pij[e], j = Pj[e], dx = Y[i][0] - Y[j][0], dy = Y[i][1] - Y[j][1], q = 1 / (1 + dx * dx + dy * dy), f = exag * Pv[e] * q;
+      pos[i][0] += f * dx; pos[i][1] += f * dy; }
+    for (let i = 0; i < n; i++) for (let a = 0; a < 2; a++) {
+      const g = 4 * (pos[i][a] - neg[i][a] / sQ);
+      if (upd[i][a] * g < 0) gains[i][a] += 0.2; else gains[i][a] *= 0.8; if (gains[i][a] < 0.01) gains[i][a] = 0.01;
+      upd[i][a] = mom * upd[i][a] - lr * gains[i][a] * g; Y[i][a] += upd[i][a];
+    }
+    if (onIter && it % 50 === 49) onIter(it + 1);
+  }
+  return Y.map((y) => Array.from(y));
+}
+function som(X, dr, seed) {                                        // readings._som: MiniSom, own PCA init, BMU + a sub-cell offset
+  const n = X.length, d = X[0].length; let [gx, gy] = dr.som_grid || [20, 20];
+  if (n < gx * gy / 4) gx = gy = Math.max(2, Math.ceil(Math.sqrt(n * 2)));
+  const sigma0 = dr.som_sigma ?? Math.max(gx, gy) / 4, lr0 = 0.5, T = Math.floor(dr.som_iter ?? 5000);
+  const mu = new Float64Array(d); for (const x of X) for (let j = 0; j < d; j++) mu[j] += x[j] / n;
+  const sub = X.filter((_, i) => i % Math.max(1, Math.floor(n / 2000)) === 0), m = sub.length;      // PCA of the subsample (np.linalg.svd of Xc[::step])
+  const C = Array.from({ length: d }, () => new Float64Array(d));
+  for (const x of sub) for (let a = 0; a < d; a++) { const xa = x[a] - mu[a]; for (let b = a; b < d; b++) C[a][b] += xa * (x[b] - mu[b]); }
+  for (let a = 0; a < d; a++) for (let b = a; b < d; b++) { C[a][b] /= Math.max(1, m - 1); C[b][a] = C[a][b]; }
+  const e = new EigenvalueDecomposition(new Matrix(C.map((r) => Array.from(r))), { assumeSymmetric: true }), ev = e.realEigenvalues, V = e.eigenvectorMatrix;
+  const ord = ev.map((v, i) => i).sort((a, b) => ev[b] - ev[a]), v0 = ord[0], v1 = ord[1], sd0 = Math.sqrt(Math.max(ev[v0], 0)), sd1 = d > 1 ? Math.sqrt(Math.max(ev[v1], 0)) : 0;
+  const lin = (k, N) => N === 1 ? 0 : -1.5 + 3 * k / (N - 1);
+  const W = []; for (let i = 0; i < gx; i++) for (let j = 0; j < gy; j++) W.push(Float64Array.from({ length: d }, (_, t) => mu[t] + lin(i, gx) * V.get(t, v0) * sd0 + (d > 1 ? lin(j, gy) * V.get(t, v1) * sd1 : 0)));
+  const R = rng(seed + 31), order = Array.from({ length: T }, (_, t) => t % n);
+  for (let i = T - 1; i > 0; i--) { const j = Math.floor(R() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  const bmu = (x) => { let b = 0, bd = Infinity; for (let u = 0; u < W.length; u++) { const v = d2(x, W[u]); if (v < bd) { bd = v; b = u; } } return b; };
+  for (let t = 0; t < T; t++) {
+    const x = X[order[t]], w = bmu(x), ci = Math.floor(w / gy), cj = w % gy, eta = lr0 / (1 + t / (T / 2)), sig = sigma0 / (1 + t / (T / 2)), dd2 = 2 * sig * sig;
+    for (let u = 0; u < W.length; u++) { const i = Math.floor(u / gy), j = u % gy, g = Math.exp(-((i - ci) ** 2) / dd2) * Math.exp(-((j - cj) ** 2) / dd2) * eta;
+      if (g < 1e-12) continue; const Wu = W[u]; for (let k = 0; k < d; k++) Wu[k] += g * (x[k] - Wu[k]); }
+  }
+  return X.map((x) => { let b1 = 0, b2 = 1, d1 = Infinity, dd = Infinity;
+    for (let u = 0; u < W.length; u++) { const v = d2(x, W[u]); if (v < d1) { dd = d1; b2 = b1; d1 = v; b1 = u; } else if (v < dd) { dd = v; b2 = u; } }
+    const f = Math.sqrt(d1) / (Math.sqrt(d1) + Math.sqrt(dd) + 1e-12) * 0.5, p1 = [Math.floor(b1 / gy), b1 % gy], p2 = [Math.floor(b2 / gy), b2 % gy];
+    return [p1[0] + f * (p2[0] - p1[0]), p1[1] + f * (p2[1] - p1[1])]; });
+}
 function iforest(X, contamination = 0.03, seed = 42, nTrees = 200) {   // sklearn IsolationForest: max_samples 256, score = mean path
   const n = X.length, d = X[0].length, R = rng(seed + 13), psi = Math.min(256, n), H = Math.ceil(Math.log2(psi));
   const cN = (m) => m > 2 ? 2 * (Math.log(m - 1) + 0.5772156649) - 2 * (m - 1) / m : m === 2 ? 1 : 0;
@@ -293,13 +378,18 @@ function computeReading(get, n, groups, spec, level, progress) {
   const blocks = selectColumns(groups, spec), { X, features } = prepare(get, n, blocks, spec), seed = spec.seed ?? 42;
   progress("dr");
   const cosine = (a, b) => { let s = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { s += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; } return 1 - s / (Math.sqrt(na * nb) || 1); };
-  const umap = (dims) => { if (n <= dims + 1) return X.map((x) => Array.from({ length: dims }, (_, j) => x[j] || 0));
+  const reduce = (dims) => { if (n <= dims + 1) return X.map((x) => Array.from({ length: dims }, (_, j) => x[j] || 0));
+    const method = spec.dr.method || "umap";                     // readings.run_dr
+    if (method === "pca") return pca(X, Math.min(dims, X[0].length)).map((r) => Array.from(r));
+    if (method === "tsne" && dims !== 2) throw new Error(`${spec.name}: t-SNE maps are 2-D here — cluster in the 2-D map or in feature space`);
+    if (method === "tsne") return tsne(X, dims, Math.min(spec.dr.perplexity ?? 30, Math.max(1, (n - 1) / 3)), seed, (it) => progress(`dr · t-SNE ${it}/1000`));
+    if (method === "som") return som(X, spec.dr, seed);
     const nn = Math.max(2, Math.min(spec.dr.n_neighbors ?? 15, n - 1)), opt = { nComponents: dims, nNeighbors: nn, minDist: spec.dr.min_dist ?? 0.1, random: rng(seed) };
     if (spec.dr.metric === "cosine") opt.distanceFn = cosine;
     return new UMAP(opt).fit(X.map((r) => Array.from(r))); };
-  const emb = umap(2);
+  const emb = reduce(2);
   const cs = spec.cluster || { k: "auto" }; let Zc = X;
-  if ((cs.space || "feature") === "dr") { const cd = +(cs.dims || 2); Zc = cd === 2 ? emb : (progress("dr_cluster"), umap(cd)); }
+  if ((cs.space || "feature") === "dr") { const cd = +(cs.dims || 2); Zc = cd === 2 ? emb : (progress("dr_cluster"), reduce(cd)); }
   progress("cluster"); const cl = clustering(Zc.map((r) => Float64Array.from(r)), cs, seed);
   progress("anomaly"); const an = n >= 5 ? iforest(X, (spec.anomaly || {}).contamination ?? 0.03, seed) : { flag: new Int32Array(n), score: new Float64Array(n) };
   progress("knn"); const kn = knn(X, (spec.knn || {}).k ?? 10), k2 = knn(emb, 10);
@@ -402,4 +492,4 @@ self.onmessage = async (ev) => {
     else if (m.type === "finish") { const t = performance.now(); const r = finish(m.config || {}); post({ type: "done", ...r, seconds: +((performance.now() - t) / 1000).toFixed(1) }, r.clap ? [r.clap.buffer] : []); }
   } catch (e) { post({ type: "error", error: String(e && e.stack || e) }); }
 };
-export { spectral, kmeans, silhouette, clustering, gmm };
+export { spectral, kmeans, silhouette, clustering, gmm, tsne, som, pca };
