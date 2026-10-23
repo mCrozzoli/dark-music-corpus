@@ -352,6 +352,7 @@
       try { await this.demoClap(); } catch (_) {}
       if (!W.clap) return this.push({ type: "probe", error: W.mode === "own" ? "the text probe needs CLAP: analyse your corpus again with “+ CLAP”"
                                                                        : "the demo's CLAP embeddings did not load" });
+      const TM = TEXT_MODEL(); if (TM.error) return this.push({ type: "probe", error: TM.error });   // the corpus's own CLAP checkpoint
       const L = W.data.levels.l1, n = L.n, C = W.clap, d = C.length / n, w = engine();
       const note = (t) => { const el = document.getElementById("pb-note"); if (el) { el.style.color = ""; el.textContent = t; } };
       note("probe: loading the CLAP text model (127 MB, once)…");
@@ -368,9 +369,7 @@
           this.probes[name] = { values: vals, desc, key: [name, "signal", mn, mx, mu, sd, 0, -1, "S9"] };
           this.link.announceLive(); this.push({ type: "probe", name, desc, values: vals });
         } };
-      const P = url("models/clap/text_model_int8.onnx.part");
-      w.postMessage({ type: "text", text, parts: [{ url: P + "0", bytes: TEXT_PART_BYTES[0] }, { url: P + "1", bytes: TEXT_PART_BYTES[1] }],
-                      vocab: url("models/clap/tokenizer/vocab.json"), merges: url("models/clap/tokenizer/merges.txt"), ort: url("vendor/ort/ort.wasm.min.mjs"), wasm: url("vendor/ort/") });
+      w.postMessage(Object.assign({ type: "text", text }, TM));
     }
     probeClap(ref) {                                              // bridge.compute_probe "reference": CLAP, centred (CLAP is anisotropic)
       const L = W.data.levels.l1, n = L.n, C = W.clap, d = C.length / n, mu = new Float64Array(d);
@@ -401,11 +400,21 @@
       document.body.appendChild(el); }
     el.innerHTML = html; el.hidden = false; if (done) setTimeout(() => { el.hidden = true; }, 6000);
   }
-  const TEXT_MODEL = () => { const P = url("models/clap/text_model_int8.onnx.part");          // for Y11 (text tags), loaded by the worker when the family is on
-    return { model: "laion/larger_clap_music_and_speech", parts: [{ url: P + "0", bytes: TEXT_PART_BYTES[0] }, { url: P + "1", bytes: TEXT_PART_BYTES[1] }],
+  // the CLAP checkpoints this page carries (phase2.features.clap.model); all three share the RoBERTa tokenizer
+  const CLAP_MODELS = {
+    "laion/larger_clap_music_and_speech": { dir: "models/clap/", fused: false, text: [63267462, 63267461] },
+    "laion/larger_clap_music": { dir: "models/clap-music/", fused: false, text: null,
+      textError: "laion/larger_clap_music: the text tower maps different prompts to almost the same vector (mean pairwise cosine 0.999 > 0.98); text keys skipped" },
+    "laion/clap-htsat-fused": { dir: "models/clap-htsat-fused/", fused: true, text: [63267403, 63267402] } };
+  const CLAP_DEFAULT = "laion/larger_clap_music_and_speech";
+  const clapId = (p2) => { const m = (((p2 || {}).features || {}).clap || {}).model; return CLAP_MODELS[m] ? m : CLAP_DEFAULT; };
+  const corpusClap = () => (W.mode === "own" && OWN.clapModel) || CLAP_DEFAULT;     // the model the corpus's embeddings come from
+  const TEXT_MODEL = (id = corpusClap()) => { const M = CLAP_MODELS[id]; if (!M.text) return { error: M.textError, model: id };
+    const P = url(M.dir + "text_model_int8.onnx.part");          // for the text probe and Y11 (text tags)
+    return { model: id, parts: [{ url: P + "0", bytes: M.text[0] }, { url: P + "1", bytes: M.text[1] }],
              vocab: url("models/clap/tokenizer/vocab.json"), merges: url("models/clap/tokenizer/merges.txt"), ort: url("vendor/ort/ort.wasm.min.mjs"), wasm: url("vendor/ort/") }; };
   function runWorker(msg, onProgress) {
-    if (msg.type === "finish") Object.assign(msg, { textModel: TEXT_MODEL(), labelsCsv: OWN.labelsCsv || null });
+    if (msg.type === "finish") Object.assign(msg, { textModel: TEXT_MODEL(), labelsCsv: OWN.labelsCsv || null, clapUsed: OWN.clapDone ? corpusClap() : null });
     return new Promise((res, rej) => {
       const w = engine();
       w.onmessage = (ev) => { const m = ev.data;
@@ -546,7 +555,7 @@
     w.postMessage({ type: "reset" });
     if (useClap) await new Promise((res, rej) => { w.onmessage = (ev) => { const m = ev.data;
         if (m.type === "progress" && m.stage === "clap_model") report("clap_model", m); else if (m.type === "clap_ready") { W.clapThreads = m.threads; res(); } else if (m.type === "error") rej(new Error(m.error)); };
-      w.postMessage({ type: "clap", model: url("models/clap/audio_model_int8.onnx"), ort: url("vendor/ort/ort.wasm.min.mjs"), wasm: url("vendor/ort/") }); });
+      w.postMessage({ type: "clap", model: url(CLAP_MODELS[clapId(p2)].dir + "audio_model_int8.onnx"), fused: CLAP_MODELS[clapId(p2)].fused, ort: url("vendor/ort/ort.wasm.min.mjs"), wasm: url("vendor/ort/") }); });
     const t0 = performance.now(); let i = 0;
     for (const f of all) {
       if (CANCEL && Atomics.load(CANCEL, 0) || (job && job.discarded)) throw Object.assign(new Error("cancelled"), { cancelled: true });
@@ -564,7 +573,7 @@
         if (String(e && e.message || e).includes("not available in the browser")) throw e; console.warn("skipped", rel, e); }
       i++;
     }
-    OWN.p2Done = p2Key(p2); OWN.clapDone = useClap;
+    OWN.p2Done = p2Key(p2); OWN.clapDone = useClap; OWN.clapModel = useClap ? clapId(p2) : null;
     return files;
   }
   async function analyseFolder(list) {
@@ -615,7 +624,6 @@
   });
   W.analyseFolder = analyseFolder;
 
-  const TEXT_PART_BYTES = [63267462, 63267461];                     // models/clap/text_model_int8.onnx.part0/1 (for the progress line)
   const NATIVE_WS = window.WebSocket;
   window.WebSocket = function (u, p) { return /:page$/.test(String(u)) ? new PageSocket() : new NATIVE_WS(u, p); };
   Object.assign(window.WebSocket, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });

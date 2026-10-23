@@ -118,6 +118,10 @@ preprocessing, data processing, mapping utilities) and its web style kit (`darks
   `models/clap/NOTICE.md`), with the model's own BPE vocabulary and merges; the tokenizer is a JavaScript port of the
   RoBERTa byte-level BPE. CLAP's input features are a JavaScript port of Hugging Face Transformers'
   `ClapFeatureExtractor` (Apache-2.0).
+- **Two more CLAP checkpoints**, chosen in Phase 2 (features.clap.model), each exported to ONNX and quantised to 8 bits
+  (Apache-2.0, LAION; Wu et al., ICASSP 2023; notices in `models/clap-music/` and `models/clap-htsat-fused/`):
+  `laion/larger_clap_music` (audio encoder only: its text side is collapsed) and `laion/clap-htsat-fused`
+  (audio and text encoders; the Hugging Face port of LAION-CLAP's 630k-audioset fusion model).
 - **Rubik** and **Karla** typefaces (SIL Open Font License 1.1), served by Google Fonts through the style kit.
 - Demo excerpts encoded with **FFmpeg** (libopus, LAME); the tool itself ships no FFmpeg code.
 - Hosting: **GitHub Pages**.

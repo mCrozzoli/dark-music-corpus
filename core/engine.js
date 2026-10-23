@@ -656,6 +656,7 @@ async function finish(cfg, opts = {}) {
   let text = null;
   if (fam("Y11").enabled && groups.clap) {                        // keys.text_embeddings: the prompts through the CLAP text tower, collapse check
     if (!opts.textModel) text = { error: "the CLAP text model is not available to this page" };
+    else if (opts.textModel.error) text = { error: opts.textModel.error };
     else { try { const tm = opts.textModel, prompts = (fam("Y11").prompts || []).map(String);
       await CLAP.loadText(tm.parts, tm.vocab, tm.merges, tm.ort, tm.wasm, (got, total) => post({ type: "progress", stage: "text_model", got, total }));
       const T = await CLAP.embedText(prompts); let off = 0;
@@ -689,7 +690,7 @@ async function finish(cfg, opts = {}) {
   const meta = (k) => ({ name: k.name, kind: k.kind, family: k.family, desc: k.desc, n_classes: k.n_classes, noise_class: k.noise_class === -1 ? null : k.noise_class, labels: k.labels || null, min: k.min, max: k.max });
   const version = String(Date.now());
   const warnings = K.warnings.slice(), clapModel = (((cfg.phase2 || {}).features || {}).clap || {}).model;
-  if (groups.clap && clapModel && clapModel !== "laion/larger_clap_music_and_speech") warnings.push(`CLAP: ${clapModel} is not in this page — the embeddings are laion/larger_clap_music_and_speech`);
+  if (groups.clap && opts.clapUsed && clapModel && opts.clapUsed !== clapModel) warnings.push(`CLAP: ${clapModel} is not in this page — the embeddings are ${opts.clapUsed}`);
   if (!groups.clap) warnings.push("computed in your browser without CLAP: the CLAP readings and text tags need the CLAP step (◫ your corpus → + CLAP)");
   const payload = { version, label: "your corpus", corpus: "your corpus", corpus_name: cfg.corpus_name || "your_corpus", readings: specs.map((s) => s.name),
     live: s2, keys: { live: liveStats.map(meta), readings: Object.fromEntries(Object.entries(rkeys).map(([n, ks]) => [n, ks.map(meta)])), warnings },
@@ -720,11 +721,11 @@ self.onmessage = async (ev) => {
       const mean = off / (P * (P - 1));
       post({ type: "text_embed", text: m.text, vec: T[0], collapsed: mean > 0.98, mean_pairwise: +mean.toFixed(4) }, [T[0].buffer]);
     }
-    else if (m.type === "clap") { await CLAP.load(m.model, m.ort, m.wasm, (got, total) => post({ type: "progress", stage: "clap_model", got, total }));
+    else if (m.type === "clap") { await CLAP.load(m.model, m.ort, m.wasm, (got, total) => post({ type: "progress", stage: "clap_model", got, total }), !!m.fused);
                                    clapOn = true; post({ type: "clap_ready", threads: CLAP.threads() }); }
     else if (m.type === "finish") { const t = performance.now(); cancelFlag = m.cancel || null;
       const catalogue = m.catalogue || await fetch(new URL("../data/keys_catalogue.json", import.meta.url)).then((q) => q.json());
-      const r = await finish(m.config || {}, { catalogue, textModel: m.textModel || null, labelsCsv: m.labelsCsv || null }); post({ type: "done", ...r, seconds: +((performance.now() - t) / 1000).toFixed(1) }, r.clap ? [r.clap.buffer] : []); }
+      const r = await finish(m.config || {}, { catalogue, textModel: m.textModel || null, labelsCsv: m.labelsCsv || null, clapUsed: m.clapUsed || null }); post({ type: "done", ...r, seconds: +((performance.now() - t) / 1000).toFixed(1) }, r.clap ? [r.clap.buffer] : []); }
   } catch (e) { if (String(e && e.message) === "__cancelled__") post({ type: "cancelled" }); else post({ type: "error", error: String(e && e.stack || e) }); }
 };
 export { dbscan, agglomerative, hdbscan, lof, spectral, kmeans, silhouette, clustering, gmm, tsne, som, pca, ari, nmi, trustworthiness, knnFar, compare };

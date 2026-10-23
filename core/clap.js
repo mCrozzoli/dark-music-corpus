@@ -1,5 +1,6 @@
 // Dark Music Corpus — CLAP audio embeddings in the browser (2026-10-22).
-// The desktop engine (dmc/clap.py) runs laion/larger_clap_music through Hugging Face's ClapProcessor + ClapModel. Here:
+// The desktop engine (dmc/clap.py) runs a CLAP checkpoint through Hugging Face's ClapProcessor + ClapModel. Here (three
+// checkpoints: larger_clap_music_and_speech, larger_clap_music, clap-htsat-fused — the last with HTK mel ×4, "fusion"):
 //   · features(): a port of transformers' ClapFeatureExtractor for clips ≤ 10 s (truncation "rand_trunc", padding
 //     "repeatpad"): the clip (48 kHz mono) is tiled int(480000 / n) times and zero-padded to 480000 samples; a log-mel
 //     spectrogram follows — reflect-padded frames of 1024, hop 480, periodic Hann, |rfft|², 64 Slaney mel filters
@@ -26,6 +27,14 @@ const NB = NFFT / 2 + 1;
 // transformers.audio_utils.mel_filter_bank(513, 64, 50, 14000, 48000, norm="slaney", mel_scale="slaney") → [NB][NMEL]
 const hz2mel = (f) => f < 1000 ? 3 * f / 200 : 15 + Math.log(f / 1000) * 27 / Math.log(6.4);
 const mel2hz = (m) => m < 15 ? 200 * m / 3 : 1000 * Math.exp(Math.log(6.4) * (m - 15) / 27);
+// the fused model (laion/clap-htsat-fused, truncation "fusion") reads mel_filter_bank(…, norm=None, mel_scale="htk") instead
+const MEL_HTK = (() => {
+  const h2m = (f) => 2595 * Math.log10(1 + f / 700), m2h = (m) => 700 * (10 ** (m / 2595) - 1);
+  const m0 = h2m(50), m1 = h2m(14000), ff = Array.from({ length: NMEL + 2 }, (_, i) => m2h(m0 + (m1 - m0) * i / (NMEL + 1)));
+  const fft_f = Array.from({ length: NB }, (_, k) => k * (CLAP_SR / 2) / (NB - 1)), W = Array.from({ length: NMEL }, () => new Float64Array(NB));
+  for (let m = 0; m < NMEL; m++) for (let k = 0; k < NB; k++) { const down = (fft_f[k] - ff[m]) / (ff[m + 1] - ff[m]), up = (ff[m + 2] - fft_f[k]) / (ff[m + 2] - ff[m + 1]); W[m][k] = Math.max(0, Math.min(down, up)); }
+  return W;
+})();
 const MEL = (() => {
   const m0 = hz2mel(50), m1 = hz2mel(14000), ff = Array.from({ length: NMEL + 2 }, (_, i) => mel2hz(m0 + (m1 - m0) * i / (NMEL + 1)));
   const fft_f = Array.from({ length: NB }, (_, k) => k * (CLAP_SR / 2) / (NB - 1));
@@ -36,7 +45,8 @@ const MEL = (() => {
   return W;
 })();
 
-export function features(clip) {                                  // Float32Array (48 kHz mono, ≤ 10 s) → Float32Array(1001·64)
+export function features(clip, htk = false) {                     // Float32Array (48 kHz mono, ≤ 10 s) → Float32Array(1001·64)
+  const FB = htk ? MEL_HTK : MEL;
   const n = Math.min(clip.length, MAX), w = new Float64Array(MAX);
   const reps = n > 0 ? Math.floor(MAX / n) : 0;
   for (let r = 0, o = 0; r < reps; r++, o += n) for (let i = 0; i < n; i++) w[o + i] = clip[i];
@@ -45,15 +55,16 @@ export function features(clip) {                                  // Float32Arra
   for (let f = 0; f < NFR; f++) {
     const s = f * HOP; for (let i = 0; i < NFFT; i++) { re[i] = at(s + i) * WIN[i]; im[i] = 0; }
     fft(re, im); for (let k = 0; k < NB; k++) P[k] = re[k] * re[k] + im[k] * im[k];
-    for (let m = 0; m < NMEL; m++) { const Wm = MEL[m]; let a = 0; for (let k = 0; k < NB; k++) if (Wm[k]) a += Wm[k] * P[k];
+    for (let m = 0; m < NMEL; m++) { const Wm = FB[m]; let a = 0; for (let k = 0; k < NB; k++) if (Wm[k]) a += Wm[k] * P[k];
       out[f * NMEL + m] = 10 * Math.log10(Math.max(1e-10, a)); }
   }
   void L; return out;
 }
 
-let ort = null, session = null;
-export async function load(modelUrl, ortUrl, wasmBase, onProgress) {
-  if (session) return session;
+let ort = null, session = null, sessionUrl = null, fusedModel = false;
+export async function load(modelUrl, ortUrl, wasmBase, onProgress, fused = false) {   // one audio model at a time; another URL replaces it
+  if (session && sessionUrl === modelUrl) return session;
+  session = null; fusedModel = fused;
   ort = await import(ortUrl);
   ort.env.wasm.wasmPaths = wasmBase;
   ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(8, (self.navigator && navigator.hardwareConcurrency) || 4)) : 1;
@@ -61,13 +72,14 @@ export async function load(modelUrl, ortUrl, wasmBase, onProgress) {
   const total = +r.headers.get("Content-Length") || 0, rd = r.body.getReader(), parts = []; let got = 0;
   for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; onProgress && onProgress(got, total); }
   const bytes = new Uint8Array(got); let o = 0; for (const p of parts) { bytes.set(p, o); o += p.length; }
-  session = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });
+  session = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] }); sessionUrl = modelUrl;
   return session;
 }
 export function threads() { return ort ? ort.env.wasm.numThreads : 0; }
 export async function embed(clip) {                               // → Float32Array(512), L2-normalised
-  const x = features(clip);
-  const o = await session.run({ input_features: new ort.Tensor("float32", x, [1, 1, NFR, NMEL]) });
+  let x = features(clip, fusedModel), C = 1;
+  if (fusedModel) { const y = new Float32Array(4 * x.length); for (let c = 0; c < 4; c++) y.set(x, c * x.length); x = y; C = 4; }   // fusion, ≤ 10 s: the same mel ×4, is_longer false
+  const o = await session.run({ input_features: new ort.Tensor("float32", x, [1, C, NFR, NMEL]) });
   const e = Float32Array.from(o.audio_embeds.data); let s = 0; for (const v of e) s += v * v; s = Math.sqrt(s) || 1;
   for (let i = 0; i < e.length; i++) e[i] /= s; return e;
 }
@@ -79,7 +91,7 @@ export function l2mean(rows) {
 // ---------------------------------------------------------------- the text side (text probe)
 // The text encoder (8-bit, per-channel) arrives in two halves (GitHub's file limit) and is joined here; the tokenizer is
 // core/tokenizer.js on the model's own vocab.json + merges.txt. Embeddings L2-normalised (keys.text_embeddings).
-let textSession = null, tokenizer = null;
+let textSession = null, textUrl = null, tokenizer = null;
 export const DEFAULT_PROMPTS = ["a drone", "noise", "a human voice", "strings", "percussion", "a field recording", "an electronic pulse", "near silence"];
 async function fetchBytes(u, onProgress, base = 0, total = 0) {
   const r = await fetch(u); if (!r.ok) throw new Error(`${u.split("/").pop()}: HTTP ${r.status}`);
@@ -88,7 +100,8 @@ async function fetchBytes(u, onProgress, base = 0, total = 0) {
   const b = new Uint8Array(got); let o = 0; for (const p of parts) { b.set(p, o); o += p.length; } return b;
 }
 export async function loadText(parts, vocabUrl, mergesUrl, ortUrl, wasmBase, onProgress) {
-  if (textSession) return textSession;
+  if (textSession && textUrl === parts[0].url) return textSession;
+  textSession = null;
   if (!ort) { ort = await import(ortUrl); ort.env.wasm.wasmPaths = wasmBase;
     ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(8, (self.navigator && navigator.hardwareConcurrency) || 4)) : 1; }
   const { Tokenizer } = await import("./tokenizer.js");
@@ -97,7 +110,7 @@ export async function loadText(parts, vocabUrl, mergesUrl, ortUrl, wasmBase, onP
   const total = parts.reduce((s, p) => s + p.bytes, 0); let base = 0; const chunks = [];
   for (const p of parts) { chunks.push(await fetchBytes(p.url, onProgress, base, total)); base += p.bytes; }
   const all = new Uint8Array(base); let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
-  textSession = await ort.InferenceSession.create(all, { executionProviders: ["wasm"] });
+  textSession = await ort.InferenceSession.create(all, { executionProviders: ["wasm"] }); textUrl = parts[0].url;
   return textSession;
 }
 export async function embedText(texts) {                          // → Float32Array[] (L2-normalised), one per text
