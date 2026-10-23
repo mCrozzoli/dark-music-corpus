@@ -313,7 +313,7 @@
     probe(m) {                                                   // S9: reference clip — CLAP space centred when computed, else the live features
       try {
         if (m.clear) { delete this.probes[m.name]; this.link.announceLive(); return this.push({ type: "probe", name: m.name, desc: "", values: null }); }
-        if (m.text != null) throw new Error("the text probe needs the CLAP text model, which this page does not load yet");
+        if (m.text != null) return this.probeText(String(m.text).trim());
         const L = W.data.levels.l1, n = L.n, ref = m.ref | 0;
         if (W.mode === "own" && W.clap) return this.probeClap(ref);
         const feats = Object.keys(L.feats);
@@ -328,6 +328,29 @@
         this.link.announceLive();
         this.push({ type: "probe", name, desc, values: vals });
       } catch (e) { this.push({ type: "probe", error: String(e.message || e) }); }
+    }
+    probeText(text) {                                             // bridge.compute_probe "text": CLAP similarity of every clip to the prompt
+      if (!W.clap) return this.push({ type: "probe", error: W.mode === "own" ? "the text probe needs CLAP: analyse your corpus again with “+ CLAP”"
+                                                                       : "the text probe needs CLAP embeddings: load your corpus with “+ CLAP” (◫ your corpus)" });
+      const L = W.data.levels.l1, n = L.n, C = W.clap, d = C.length / n, w = engine();
+      const note = (t) => { const el = document.getElementById("pb-note"); if (el) { el.style.color = ""; el.textContent = t; } };
+      note("probe: loading the CLAP text model (127 MB, once)…");
+      w.onmessage = (ev) => { const m = ev.data;
+        if (m.type === "progress" && m.stage === "text_model") note(`probe: loading the CLAP text model · ${(m.got / 1e6).toFixed(0)} / ${(m.total / 1e6).toFixed(0)} MB (once)`);
+        else if (m.type === "error") this.push({ type: "probe", error: m.error });
+        else if (m.type === "text_embed") {
+          if (m.collapsed) return this.push({ type: "probe", error: `the text model maps different prompts to almost the same vector (mean cosine ${m.mean_pairwise}): text probes would be meaningless` });
+          const T = m.vec, vals = new Array(n);
+          for (let i = 0; i < n; i++) { let s = 0, nn = 0; for (let j = 0; j < d; j++) { const a = C[i * d + j]; s += a * T[j]; nn += a * a; } vals[i] = +(s / (Math.sqrt(nn) + 1e-9)).toFixed(4); }
+          const name = "probe.text", desc = `CLAP similarity to “${text}”`;
+          let mn = Infinity, mx = -Infinity, mu = 0; for (const v of vals) { mn = Math.min(mn, v); mx = Math.max(mx, v); mu += v; } mu /= n;
+          let sd = 0; for (const v of vals) sd += (v - mu) ** 2; sd = Math.sqrt(sd / n);
+          this.probes[name] = { values: vals, desc, key: [name, "signal", mn, mx, mu, sd, 0, -1, "S9"] };
+          this.link.announceLive(); this.push({ type: "probe", name, desc, values: vals });
+        } };
+      const P = url("models/clap/text_model_int8.onnx.part");
+      w.postMessage({ type: "text", text, parts: [{ url: P + "0", bytes: TEXT_PART_BYTES[0] }, { url: P + "1", bytes: TEXT_PART_BYTES[1] }],
+                      vocab: url("models/clap/tokenizer/vocab.json"), merges: url("models/clap/tokenizer/merges.txt"), ort: url("vendor/ort/ort.wasm.min.mjs"), wasm: url("vendor/ort/") });
     }
     probeClap(ref) {                                              // bridge.compute_probe "reference": CLAP, centred (CLAP is anisotropic)
       const L = W.data.levels.l1, n = L.n, C = W.clap, d = C.length / n, mu = new Float64Array(d);
@@ -381,7 +404,7 @@
     const withClap = await new Promise((res) => {
       note(`<b>${root}</b> · ${all.length} files (${mb.toFixed(0)} MB). Analyse with:<div style="display:flex;gap:8px;margin-top:8px">` +
            `<button class="wbtn" id="wc-mir">sound features</button><button class="wbtn" id="wc-clap">sound features + CLAP</button></div>` +
-           `<div style="margin-top:6px;opacity:.75">CLAP adds an AI audio embedding: two more maps, closer to how sounds are perceived. It downloads a 73 MB model once and takes about ${self.crossOriginIsolated ? "a quarter of a second" : "a second or more"} per clip (one clip per second of audio). Nothing is uploaded either way.</div>`);
+           `<div style="margin-top:6px;opacity:.75">CLAP adds an AI audio embedding: two more maps, closer to how sounds are perceived. It downloads a 77 MB model once and takes about ${self.crossOriginIsolated ? "a quarter of a second" : "a second or more"} per clip (one clip per second of audio). Nothing is uploaded either way.</div>`);
       document.getElementById("wc-mir").onclick = () => res(false); document.getElementById("wc-clap").onclick = () => res(true);
     });
     const t0 = performance.now(), ctx = new AudioContext(), w = engine(), files = [];
@@ -446,6 +469,7 @@
   });
   W.analyseFolder = analyseFolder;
 
+  const TEXT_PART_BYTES = [63267462, 63267461];                     // models/clap/text_model_int8.onnx.part0/1 (for the progress line)
   const NATIVE_WS = window.WebSocket;
   window.WebSocket = function (u, p) { return /:page$/.test(String(u)) ? new PageSocket() : new NATIVE_WS(u, p); };
   Object.assign(window.WebSocket, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });

@@ -38,7 +38,7 @@ This file goes into the public `dark-music-corpus` repo and the site's about pag
 
 ## Machine-learning model
 
-- **CLAP**: `laion/larger_clap_music` by LAION, via Hugging Face. Licence **Apache-2.0** (model card,
+- **CLAP**: `laion/larger_clap_music_and_speech` by LAION (until 2026-10-23: `laion/larger_clap_music`, whose text side is collapsed), via Hugging Face. Licence **Apache-2.0** (model card,
   checked 2026-10-22). Derived ONNX exports for the web carry the same licence and attribution. Y. Wu, K. Chen, T. Zhang, Y. Hui, T. Berg-Kirkpatrick, S. Dubnov, "Large-scale Contrastive
   Language-Audio Pretraining with Feature Fusion and Keyword-to-Caption Augmentation",
   ICASSP 2023.
@@ -99,9 +99,10 @@ preprocessing, data processing, mapping utilities) and its web style kit (`darks
 - The MIR features, segmentation, rhythm, scaling, k-means with silhouette, Isolation Forest, kNN and keys are a
   JavaScript port of this project's engine (librosa 0.11 formulas; scikit-learn's algorithms), written for this page.
 - **ONNX Runtime Web** 1.30.0 by Microsoft (MIT): runs the CLAP audio encoder in the browser (WASM).
-- **CLAP audio encoder** of `laion/larger_clap_music` (Apache-2.0, LAION; Wu et al., ICASSP 2023), exported to ONNX
-  (opset 17) and quantised to 8-bit weights for the page: `models/clap/audio_model_int8.onnx`, with its notice in
-  `models/clap/NOTICE.md`. CLAP's input features are a JavaScript port of Hugging Face Transformers'
+- **CLAP audio and text encoders** of `laion/larger_clap_music_and_speech` (Apache-2.0, LAION; Wu et al., ICASSP 2023),
+  exported to ONNX (opset 17) and quantised to 8-bit weights for the page (`models/clap/`, notice in
+  `models/clap/NOTICE.md`), with the model's own BPE vocabulary and merges; the tokenizer is a JavaScript port of the
+  RoBERTa byte-level BPE. CLAP's input features are a JavaScript port of Hugging Face Transformers'
   `ClapFeatureExtractor` (Apache-2.0).
 - **Rubik** and **Karla** typefaces (SIL Open Font License 1.1), served by Google Fonts through the style kit.
 - Demo excerpts encoded with **FFmpeg** (libopus, LAME); the tool itself ships no FFmpeg code.

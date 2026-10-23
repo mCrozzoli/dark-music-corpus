@@ -390,6 +390,13 @@ self.onmessage = async (ev) => {
   try {
     if (m.type === "file") { await addFile(m); post({ type: "progress", stage: "features", done: m.i + 1, total: m.total, name: m.name }); }
     else if (m.type === "reset") { files.length = 0; clapOn = false; }
+    else if (m.type === "text") {                                 // the text probe (bridge.compute_probe "text" + keys.text_embeddings' collapse check)
+      await CLAP.loadText(m.parts, m.vocab, m.merges, m.ort, m.wasm, (got, total) => post({ type: "progress", stage: "text_model", got, total }));
+      const T = await CLAP.embedText([m.text, ...CLAP.DEFAULT_PROMPTS]), P = T.length; let off = 0;
+      for (let a = 0; a < P; a++) for (let b = 0; b < P; b++) if (a !== b) { let s = 0; for (let i = 0; i < T[a].length; i++) s += T[a][i] * T[b][i]; off += s; }
+      const mean = off / (P * (P - 1));
+      post({ type: "text_embed", text: m.text, vec: T[0], collapsed: mean > 0.98, mean_pairwise: +mean.toFixed(4) }, [T[0].buffer]);
+    }
     else if (m.type === "clap") { await CLAP.load(m.model, m.ort, m.wasm, (got, total) => post({ type: "progress", stage: "clap_model", got, total }));
                                    clapOn = true; post({ type: "clap_ready", threads: CLAP.threads() }); }
     else if (m.type === "finish") { const t = performance.now(); const r = finish(m.config || {}); post({ type: "done", ...r, seconds: +((performance.now() - t) / 1000).toFixed(1) }, r.clap ? [r.clap.buffer] : []); }

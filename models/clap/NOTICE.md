@@ -1,15 +1,20 @@
-# CLAP audio encoder — notice
+# CLAP model files — notice
 
-`audio_model_int8.onnx` is the audio encoder of **`laion/larger_clap_music`** by **LAION**
-(https://huggingface.co/laion/larger_clap_music), exported to ONNX (torch.onnx, opset 17) from the Hugging Face
-Transformers model and quantised to 8-bit weights (ONNX Runtime dynamic quantisation) for the Dark Music Corpus web tool,
-2026-10-22. Only the audio side is included; the text side is not.
+These files come from **`laion/larger_clap_music_and_speech`** by **LAION**
+(https://huggingface.co/laion/larger_clap_music_and_speech), prepared for the Dark Music Corpus web tool on 2026-10-23:
 
-Licence: **Apache License 2.0** (as stated on the model card), which also covers this derived file.
-http://www.apache.org/licenses/LICENSE-2.0
+- `audio_model_int8.onnx` — the audio encoder (with its projection), exported to ONNX (torch.onnx, opset 17) from the
+  Hugging Face Transformers model, weights quantised to 8 bits (ONNX Runtime dynamic quantisation).
+- `text_model_int8.onnx.part0` + `.part1` — the text encoder (with its projection), exported the same way and quantised
+  per channel; split in two halves only to stay under GitHub's file-size limit (the page joins them).
+- `tokenizer/vocab.json`, `tokenizer/merges.txt` — the model's RoBERTa byte-level BPE vocabulary and merges, unchanged.
+
+Licence: **Apache License 2.0** (model card), which also covers these derived files. http://www.apache.org/licenses/LICENSE-2.0
 
 Citation: Y. Wu, K. Chen, T. Zhang, Y. Hui, T. Berg-Kirkpatrick, S. Dubnov, "Large-scale Contrastive Language-Audio
 Pretraining with Feature Fusion and Keyword-to-Caption Augmentation", ICASSP 2023.
 
-Changes from the original: format conversion (PyTorch → ONNX), 8-bit dynamic quantisation of the weights. Against the
-original model on 185 clips of the demo corpus, the embeddings keep a cosine similarity of 0.9993 or more.
+Changes from the original: format conversion (PyTorch → ONNX) and 8-bit weight quantisation. Against the original model:
+audio embeddings cosine ≥ 0.997 (50 clips of the demo corpus); text embeddings cosine median 0.985, min 0.974 (15 prompts).
+Why this checkpoint and not `larger_clap_music`: the latter's text side maps every prompt to almost the same vector
+(mean pairwise cosine 0.999), so text probes are meaningless with it; this one separates them (0.30).

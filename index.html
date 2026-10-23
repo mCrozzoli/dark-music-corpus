@@ -987,7 +987,7 @@ function buildForm(){
   h+=`<div class="grp">${GROUPS.map(g=>`<label><input type="checkbox" data-p="phase2.features.${g}.enabled" data-k="bool"${p2.features[g].enabled?" checked":""}>${g}</label>`).join("")}</div>`;
   h+=knob("MFCC coefficients","phase2.features.mfcc.n_mfcc","num")+knob("chroma variant","phase2.features.chroma.variant","select",["stft","cqt","cens"]);
   h+=knob("collapse contrast bands","phase2.features.spectral.collapse_contrast","bool")+knob("tempogram window · s","phase2.features.rhythm.tempogram_win_s","num");
-  h+=knob("CLAP model","phase2.features.clap.model","select",["laion/larger_clap_music","laion/clap-htsat-fused"])+knob("CLAP device","phase2.features.clap.device","select",["auto","mps","cpu"]);
+  h+=knob("CLAP model","phase2.features.clap.model","select",["laion/larger_clap_music_and_speech","laion/larger_clap_music","laion/clap-htsat-fused"])+knob("CLAP device","phase2.features.clap.device","select",["auto","mps","cpu"]);
   h+=`<div class="tx-note">a group's features are cached per file and per its own settings: changing one group recomputes only that group</div>`;
   h+=knob("workers","phase2.workers","num","-1","-1 = all cores − 1");
   h+=keysForm();

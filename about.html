@@ -27,7 +27,9 @@
      neighbours. Hover to listen; select, step and trace to move through the corpus.</p>
   <p><b>Your audio never leaves your computer.</b> Press <b>◫ your corpus</b> and pick a folder: the analysis runs in
      this browser tab. Nothing is uploaded. You can add <b>CLAP</b>, an AI audio embedding that gives two more maps,
-     closer to how sounds are perceived: it downloads a 73 MB model once and takes a fraction of a second per clip.</p>
+     closer to how sounds are perceived: it downloads a 77 MB model once and takes a fraction of a second per clip.
+     With CLAP you can also type a <b>text probe</b> (“a drone”, “rain on a roof”…) in the sound panel: every clip is
+     coloured by how well it matches the words (one more download of 127 MB, the first time).</p>
   <p>The map you see first is a demo: the record <i>Sounding Numbers</i>, analysed beforehand.</p>
 
   <h2>Playing into Ableton Live</h2>
@@ -51,7 +53,7 @@
   <table>
     <tr><td>Concepts</td><td>Thor Magnusson, <i>Sonic Writing</i> (2019) — the signal–symbol framework · M. A. Crozzoli et al., Dark Sonification, ICAD 2025 · Dietmar Offenhuber, <i>Autographic Design</i> (2023)</td></tr>
     <tr><td>Methods</td><td>UMAP (McInnes, Healy, Melville 2018) · k-means with silhouette · Isolation Forest (Liu, Ting, Zhou 2008) · MIR features after librosa (McFee et al. 2015)</td></tr>
-    <tr><td>Model</td><td>CLAP <code>laion/larger_clap_music</code> by LAION (Apache-2.0; Wu et al., ICASSP 2023). In this page: its audio encoder, exported to ONNX and quantised to 8 bits (see <a href="models/clap/NOTICE.md">the notice</a>)</td></tr>
+    <tr><td>Model</td><td>CLAP <code>laion/larger_clap_music_and_speech</code> by LAION (Apache-2.0; Wu et al., ICASSP 2023). In this page: its audio and text encoders, exported to ONNX and quantised to 8 bits, and its tokenizer (see <a href="models/clap/NOTICE.md">the notice</a>)</td></tr>
     <tr><td>In this page</td><td>D3.js v7 (ISC) · umap-js 1.4 with ml-matrix and ml-levenberg-marquardt (MIT) · ONNX Runtime Web 1.30 (MIT, Microsoft) · Rubik and Karla fonts (SIL OFL 1.1) · the Dark Sonification style kit</td></tr>
     <tr><td>Devices</td><td>Max for Live (Cycling '74 / Ableton) · Ableton's <code>Abl.Map</code> / <code>Abl.MapUi</code>, inside the frozen devices</td></tr>
     <tr><td>Hosting</td><td>GitHub Pages</td></tr>

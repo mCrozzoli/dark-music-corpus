@@ -75,3 +75,39 @@ export function l2mean(rows) {
   const d = rows[0].length, m = new Float32Array(d); for (const r of rows) for (let i = 0; i < d; i++) m[i] += r[i];
   let s = 0; for (const v of m) s += v * v; s = Math.sqrt(s) || 1; for (let i = 0; i < d; i++) m[i] /= s; return m;
 }
+
+// ---------------------------------------------------------------- the text side (text probe)
+// The text encoder (8-bit, per-channel) arrives in two halves (GitHub's file limit) and is joined here; the tokenizer is
+// core/tokenizer.js on the model's own vocab.json + merges.txt. Embeddings L2-normalised (keys.text_embeddings).
+let textSession = null, tokenizer = null;
+export const DEFAULT_PROMPTS = ["a drone", "noise", "a human voice", "strings", "percussion", "a field recording", "an electronic pulse", "near silence"];
+async function fetchBytes(u, onProgress, base = 0, total = 0) {
+  const r = await fetch(u); if (!r.ok) throw new Error(`${u.split("/").pop()}: HTTP ${r.status}`);
+  const rd = r.body.getReader(), parts = []; let got = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; onProgress && onProgress(base + got, total); }
+  const b = new Uint8Array(got); let o = 0; for (const p of parts) { b.set(p, o); o += p.length; } return b;
+}
+export async function loadText(parts, vocabUrl, mergesUrl, ortUrl, wasmBase, onProgress) {
+  if (textSession) return textSession;
+  if (!ort) { ort = await import(ortUrl); ort.env.wasm.wasmPaths = wasmBase;
+    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(8, (self.navigator && navigator.hardwareConcurrency) || 4)) : 1; }
+  const { Tokenizer } = await import("./tokenizer.js");
+  const [vocab, merges] = await Promise.all([fetch(vocabUrl).then((r) => r.json()), fetch(mergesUrl).then((r) => r.text())]);
+  tokenizer = new Tokenizer(vocab, merges);
+  const total = parts.reduce((s, p) => s + p.bytes, 0); let base = 0; const chunks = [];
+  for (const p of parts) { chunks.push(await fetchBytes(p.url, onProgress, base, total)); base += p.bytes; }
+  const all = new Uint8Array(base); let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
+  textSession = await ort.InferenceSession.create(all, { executionProviders: ["wasm"] });
+  return textSession;
+}
+export async function embedText(texts) {                          // → Float32Array[] (L2-normalised), one per text
+  const out = [];
+  for (const t of texts) {
+    const ids = tokenizer.encode(t), n = ids.length;
+    const o = await textSession.run({ input_ids: new ort.Tensor("int64", BigInt64Array.from(ids, BigInt), [1, n]),
+                                      attention_mask: new ort.Tensor("int64", new BigInt64Array(n).fill(1n), [1, n]) });
+    const e = Float32Array.from(o.text_embeds.data); let s = 0; for (const v of e) s += v * v; s = Math.sqrt(s) || 1; for (let i = 0; i < e.length; i++) e[i] /= s;
+    out.push(e);
+  }
+  return out;
+}
