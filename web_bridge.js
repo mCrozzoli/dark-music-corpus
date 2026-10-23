@@ -315,7 +315,14 @@
         if (m.clear) { delete this.probes[m.name]; this.link.announceLive(); return this.push({ type: "probe", name: m.name, desc: "", values: null }); }
         if (m.text != null) return this.probeText(String(m.text).trim());
         const L = W.data.levels.l1, n = L.n, ref = m.ref | 0;
+        if (W.mode === "demo") return this.demoClap().then(() => W.clap ? this.probeClap(ref) : this.probeMir(ref));
         if (W.mode === "own" && W.clap) return this.probeClap(ref);
+        return this.probeMir(ref);
+      } catch (e) { this.push({ type: "probe", error: String(e.message || e) }); }
+    }
+    probeMir(ref) {
+      try {
+        const L = W.data.levels.l1, n = L.n;
         const feats = Object.keys(L.feats);
         const A = feats.map((k) => { const v = L.feats[k], s = v.slice().sort((a, b) => a - b), med = s[n >> 1]; let sd = 0, mu = 0;
           for (const x of v) mu += x; mu /= n; for (const x of v) sd += (x - mu) ** 2; sd = Math.sqrt(sd / n) + 1e-9; return v.map((x) => (x - med) / sd); });
@@ -329,9 +336,18 @@
         this.push({ type: "probe", name, desc, values: vals });
       } catch (e) { this.push({ type: "probe", error: String(e.message || e) }); }
     }
-    probeText(text) {                                             // bridge.compute_probe "text": CLAP similarity of every clip to the prompt
+    async demoClap() {                                            // the demo's CLAP matrix (export_demo.py), loaded on the first probe
+      if (W.mode !== "demo" || W.clap) return;
+      const [q, s] = await Promise.all([NATIVE_FETCH(url("data/clap_l1.i8")), NATIVE_FETCH(url("data/clap_l1_scale.f32"))]);
+      if (!q.ok || !s.ok) return;
+      const Q = new Int8Array(await q.arrayBuffer()), sc = new Float32Array(await s.arrayBuffer()), n = sc.length, d = Q.length / n, C = new Float32Array(Q.length);
+      for (let i = 0; i < n; i++) for (let j = 0; j < d; j++) C[i * d + j] = Q[i * d + j] * sc[i];
+      W.clap = C;
+    }
+    async probeText(text) {                                       // bridge.compute_probe "text": CLAP similarity of every clip to the prompt
+      try { await this.demoClap(); } catch (_) {}
       if (!W.clap) return this.push({ type: "probe", error: W.mode === "own" ? "the text probe needs CLAP: analyse your corpus again with “+ CLAP”"
-                                                                       : "the text probe needs CLAP embeddings: load your corpus with “+ CLAP” (◫ your corpus)" });
+                                                                       : "the demo's CLAP embeddings did not load" });
       const L = W.data.levels.l1, n = L.n, C = W.clap, d = C.length / n, w = engine();
       const note = (t) => { const el = document.getElementById("pb-note"); if (el) { el.style.color = ""; el.textContent = t; } };
       note("probe: loading the CLAP text model (127 MB, once)…");

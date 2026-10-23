@@ -1,6 +1,6 @@
 {
- "exported": "2026-10-22 14:42:15",
- "version": "1792672934825",
+ "exported": "2026-10-23 09:50:21",
+ "version": "1792741821042",
  "label": "default",
  "corpus_name": "sounding_numbers",
  "n_clips": 3410,
@@ -10,7 +10,14 @@
   "clap_umap",
   "mirclap_umap"
  ],
- "payload_bytes_gz": 469573,
- "payload_sha16": "49991b87ea5bab5a",
- "link_bytes": 134552
+ "payload_bytes_gz": 481636,
+ "payload_sha16": "c75c73f701844ac9",
+ "link_bytes": 134554,
+ "clap_matrix": {
+  "n": 3410,
+  "d": 512,
+  "min_cos_after_8bit": 0.999926,
+  "bytes": 1759560,
+  "model": "laion/larger_clap_music_and_speech"
+ }
 }
