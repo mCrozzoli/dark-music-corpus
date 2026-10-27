@@ -112,6 +112,8 @@ preprocessing, data processing, mapping utilities) and its web style kit (`darks
   librosa's constant-Q chroma (cqt / cens); WAV / AIFF decoding by libsndfile's conventions; resampling to the published
   specification of libsoxr's "HQ" setting (the resampler librosa uses), as a Kaiser-windowed sinc filter written for this
   page. No library code is copied.
+- A **FLAC decoder** written for Uncanny Listening after the format specification (xiph.org FLAC format, RFC 9639) and
+  reused here (`core/flac.js`).
 - **ONNX Runtime Web** 1.30.0 by Microsoft (MIT): runs the CLAP audio encoder in the browser (WASM).
 - **CLAP audio and text encoders** of `laion/larger_clap_music_and_speech` (Apache-2.0, LAION; Wu et al., ICASSP 2023),
   exported to ONNX (opset 17) and quantised to 8-bit weights for the page (`models/clap/`, notice in

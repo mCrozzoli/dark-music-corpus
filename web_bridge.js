@@ -83,7 +83,11 @@
   async function ownTrack(f) {
     if (!OWN.files[f]) throw new Error("the audio folder is not linked: open it with “link audio folder”");
     if (!OWN.decoded.has(f)) {
-      OWN.decoded.set(f, OWN.files[f].arrayBuffer().then((b) => new OfflineAudioContext(2, 1, 48000).decodeAudioData(b)));
+      OWN.decoded.set(f, OWN.files[f].arrayBuffer().then(async (b) => {
+        const M = await flacMod();
+        if (M.isFlac(new Uint8Array(b))) { const d = M.decodeFlac(b), k = 2 ** (d.bits - 1), ch = d.data.slice(0, 2).map((c) => Float32Array.from(c, (v) => v / k));
+          return { sampleRate: d.sampleRate, numberOfChannels: ch.length, length: d.length, getChannelData: (c) => ch[c] }; }
+        return new OfflineAudioContext(2, 1, 48000).decodeAudioData(b); }));
       while (OWN.decoded.size > 2) OWN.decoded.delete(OWN.decoded.keys().next().value);
     }
     return OWN.decoded.get(f);
@@ -501,7 +505,7 @@
       if ((tag(0) === "RIFF" || tag(0) === "RF64") && tag(8) === "WAVE") { for (let o = 12; o + 8 <= b.length;) { const id = tag(o), sz = dv.getUint32(o + 4, true); if (id === "fmt ") return dv.getUint32(o + 12, true); o += 8 + sz + (sz & 1); } }
       if (tag(0) === "FORM" && (tag(8) === "AIFF" || tag(8) === "AIFC")) { for (let o = 12; o + 8 <= b.length;) { const id = tag(o), sz = dv.getUint32(o + 4); if (id === "COMM") {
             const e = o + 16, ex = ((b[e] & 0x7f) << 8) | b[e + 1], hi = dv.getUint32(e + 2), lo = dv.getUint32(e + 6); return Math.round((hi * 2 ** 32 + lo) * 2 ** (ex - 16383 - 63)); } o += 8 + sz + (sz & 1); } }
-      if (tag(0) === "fLaC") return (b[18] << 12) | (b[19] << 4) | (b[20] >> 4);
+      { const o3 = id3Skip(b); if (tag(o3) === "fLaC") return (b[o3 + 18] << 12) | (b[o3 + 19] << 4) | (b[o3 + 20] >> 4); }
       if (tag(0) === "OggS") { const i = b.findIndex((x, k) => k > 27 && tag(k, 8) === "OpusHead"); if (i > 0) return 48000;
         const v = b.findIndex((x, k) => k > 27 && x === 1 && tag(k + 1, 6) === "vorbis"); if (v > 0) return dv.getUint32(v + 12, true); }
       let o = 0; if (tag(0, 3) === "ID3") o = 10 + ((b[6] & 0x7f) << 21 | (b[7] & 0x7f) << 14 | (b[8] & 0x7f) << 7 | (b[9] & 0x7f));
@@ -547,17 +551,17 @@
     }
     return { sampleRate: fmt.sr, numberOfChannels: ch, length: n, getChannelData: (c) => y[c] };
   }
+  // FLAC: decoded here (core/flac.js, as libsndfile), not by the browser — Chromium refuses some valid files and the header
+  // reader once mistook ID3-prefixed FLACs for MP3
+  let FLAC = null; const flacMod = () => FLAC || (FLAC = import(url("core/flac.js")));
+  const id3Skip = (b) => b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33 ? 10 + ((b[6] & 0x7f) << 21 | (b[7] & 0x7f) << 14 | (b[8] & 0x7f) << 7 | (b[9] & 0x7f)) + (b[5] & 0x10 ? 10 : 0) : 0;
   async function decodeNative(buf) {
     const pcm = decodePcm(buf); if (pcm) return pcm;
-    const b = new Uint8Array(buf), flacBits = String.fromCharCode(b[0], b[1], b[2], b[3]) === "fLaC" ? (((b[20] & 1) << 4) | (b[21] >> 4)) + 1 : 0;
+    const M = await flacMod();
+    if (M.isFlac(new Uint8Array(buf))) { const d = M.decodeFlac(buf, { mono: true });       // numpy's float32 mean of the channels, as librosa.load(mono=True)
+      return { sampleRate: d.sampleRate, numberOfChannels: 1, length: d.length, getChannelData: () => d.y }; }
     const sr = nativeRate(buf), ctx = sr ? new OfflineAudioContext(1, 1, sr) : new AudioContext();
     let dec; try { dec = await ctx.decodeAudioData(buf.slice(0)); } finally { if (ctx.close) ctx.close(); }
-    if (flacBits === 16) {                                          // Chromium scales 16-bit FLAC by 1/32767 above zero (1/32768 below): back to k / 32768 (libsndfile)
-      const chs = Array.from({ length: dec.numberOfChannels }, (_, c) => dec.getChannelData(c));
-      const asym = chs.some((x) => { for (let i = 0; i < x.length; i += 97) if (x[i] > 0 && x[i] * 32768 !== Math.round(x[i] * 32768)) return true; return false; });
-      if (asym) return { sampleRate: dec.sampleRate, numberOfChannels: chs.length, length: dec.length,
-        getChannelData: (c) => Float32Array.from(chs[c], (v) => Math.round(v * (v > 0 ? 32767 : 32768)) / 32768) };
-    }
     return dec;
   }
 
@@ -599,7 +603,7 @@
       if (tag(0) === "FORM") for (let o = 12; o + 8 <= b.length;) { const id = tag(o), sz = dv.getUint32(o + 4);
         if (id === "COMM") { const e = o + 16, ex = ((b[e] & 0x7f) << 8) | b[e + 1], sr = (dv.getUint32(e + 2) * 2 ** 32 + dv.getUint32(e + 6)) * 2 ** (ex - 16383 - 63); return dv.getUint32(o + 10) / sr; }
         o += 8 + sz + (sz & 1); }
-      if (tag(0) === "fLaC") { const sr = (b[18] << 12) | (b[19] << 4) | (b[20] >> 4), n = (b[21] & 0x0f) * 2 ** 32 + dv.getUint32(22); if (sr && n) return n / sr; }
+      { const o3 = id3Skip(b); if (tag(o3) === "fLaC") { const sr = (b[o3 + 18] << 12) | (b[o3 + 19] << 4) | (b[o3 + 20] >> 4), n = (b[o3 + 21] & 0x0f) * 2 ** 32 + dv.getUint32(o3 + 22); if (sr && n) return n / sr; } }
     } catch (_) { /* fall through */ }
     return f.size * 8 / 192000;
   }
