@@ -29,15 +29,26 @@
   // ------------------------------------------------------------------ the dataset (demo for now; own corpus in Phase D)
   const IS_SAFARI = /^((?!chrome|chromium|crios|fxios|edg|opr|android).)*safari/i.test(navigator.userAgent);
   const W = (window.DMC_WEB = { ready: null, data: null, link: null, audio: null, mode: "demo" });
-  // cross-origin isolation (CLAP on several threads): register coi-sw.js once and reload once; never loop
-  if (!self.crossOriginIsolated && "serviceWorker" in navigator && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname) || (!self.crossOriginIsolated && new URLSearchParams(location.search).get("coi") === "1")) {
+  // cross-origin isolation (CLAP on several threads): register coi-sw.js once and reload once; never loop.
+  // Safari has no COEP "credentialless", so the worker can never isolate it: no worker, no reload there (a reload per
+  // new tab, since the "tried" flag is per tab, cancelled the data fetches of the first boot). Elsewhere the data
+  // fetches wait until the page knows it will not reload (Dark Earth's whenBootable guard).
+  const bootable = (async () => {
+    const forced = new URLSearchParams(location.search).get("coi") === "1";
+    if (self.crossOriginIsolated || !("serviceWorker" in navigator) || IS_SAFARI) return;
+    if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && !forced) return;
+    let tried = false; try { tried = sessionStorage.getItem("dmc.coi") === "1"; } catch (_) {}
+    try { await navigator.serviceWorker.register(url("coi-sw.js")); } catch (_) { return; }   // no worker: one thread
+    if (tried) return;
     // reload only once the worker is ACTIVE (a reload right after register() lands on an uncontrolled page)
-    navigator.serviceWorker.register(url("coi-sw.js")).then(() => navigator.serviceWorker.ready).then(() => {
-      let tried = false; try { tried = sessionStorage.getItem("dmc.coi") === "1"; } catch (_) {}
-      if (!tried) { try { sessionStorage.setItem("dmc.coi", "1"); } catch (_) {} location.reload(); }
-    }).catch(() => {});
-  }
+    const ready = await Promise.race([navigator.serviceWorker.ready.then(() => true), new Promise((r) => setTimeout(() => r(false), 8000))]);
+    if (!ready) return;                                          // the worker never activated: boot without isolation
+    try { sessionStorage.setItem("dmc.coi", "1"); } catch (_) {}
+    location.reload();
+    await new Promise(() => {});                                 // never boot the page that is about to go away
+  })();
   W.ready = (async () => {
+    await bootable;
     const [data, link] = await Promise.all([gunzipJson("data/payload.json.gz"), staticJson("data/link.json")]);
     W.data = data; W.linkData = link;
     W.clipRow = new Map(data.levels.l1.clip_id.map((c, i) => [c, i]));
