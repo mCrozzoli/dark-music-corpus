@@ -1,4 +1,4 @@
-# Dark Music Corpus
+# Music Corpus
 
 Navigate a music corpus of your own, by ear and by eye, and play it into Ableton Live.
 
